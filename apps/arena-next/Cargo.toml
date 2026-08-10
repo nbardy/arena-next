@@ -1,0 +1,31 @@
+[package]
+name = "arena-next"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Small native Hearthstone Arena overlay for macOS"
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ureq.workspace = true
+arena-analysis = { path = "../../crates/arena-analysis" }
+arena-draft = { path = "../../crates/arena-draft" }
+arena-rules = { path = "../../crates/arena-rules" }
+arena-scoring = { path = "../../crates/arena-scoring" }
+arena-popup = { path = "../../crates/arena-popup" }
+hs-card-data = { path = "../../crates/hs-card-data" }
+hs-log-config = { path = "../../crates/hs-log-config" }
+hs-observer = { path = "../../crates/hs-observer" }
+hs-paths = { path = "../../crates/hs-paths" }
+hs-state = { path = "../../crates/hs-state" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+arena-next-macos-capture = { path = "../../platform/macos/capture" }
+arena-next-macos-overlay = { path = "../../platform/macos/overlay-host" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+arena-next-windows-shell = { path = "../../platform/windows/shell" }

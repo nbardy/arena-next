@@ -1,0 +1,14 @@
+# Build artifacts can occur in independent platform crates and historical
+# spikes; none belong in the source repository or release bundle.
+target/
+dist/
+node_modules/
+# Preserved locally for archaeology only; experimental UI code is never part
+# of the native product or a source distribution.
+/spikes/
+/.DS_Store
+/.arena-next/
+*.log
+!fixtures/**/*.log
+# Local scratch (image generation, OCR debug crops); never source or release.
+/tmp/

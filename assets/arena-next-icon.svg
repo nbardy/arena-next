@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="ArenaNext">
+  <defs>
+    <linearGradient id="bg" x1="72" y1="52" x2="440" y2="468" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8e6bdf"/>
+      <stop offset="1" stop-color="#251443"/>
+    </linearGradient>
+    <linearGradient id="card" x1="170" y1="113" x2="342" y2="398" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f7eab6"/>
+      <stop offset="1" stop-color="#d89e4e"/>
+    </linearGradient>
+  </defs>
+  <rect x="24" y="24" width="464" height="464" rx="112" fill="url(#bg)"/>
+  <path d="M256 78 409 164v184L256 434 103 348V164z" fill="#160c28" opacity=".46"/>
+  <g fill="none" stroke="url(#card)" stroke-linejoin="round">
+    <path d="M169 132h174l26 40-26 40H169l-26-40z" stroke-width="19"/>
+    <path d="M148 221h216l25 40-25 40H148l-25-40z" stroke-width="19" opacity=".82"/>
+    <path d="M169 310h174l26 40-26 40H169l-26-40z" stroke-width="19" opacity=".64"/>
+  </g>
+  <circle cx="256" cy="261" r="37" fill="#f7eab6"/>
+  <path d="m256 236 13 25 28 4-20 20 5 28-26-13-26 13 5-28-20-20 28-4z" fill="#774cc0"/>
+</svg>

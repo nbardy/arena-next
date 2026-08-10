@@ -1,0 +1,12 @@
+[package]
+name = "hs-log-parser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+regex.workspace = true
+serde.workspace = true
+hs-state = { path = "../hs-state" }
+

@@ -1,0 +1,17 @@
+[package]
+name = "arena-scoring"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+regex.workspace = true
+ureq.workspace = true
+arena-analysis = { path = "../arena-analysis" }
+hs-card-data = { path = "../hs-card-data" }
+hs-state = { path = "../hs-state" }

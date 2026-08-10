@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "season": "fixture-season",
+  "source": "ArenaNext local fixture — not downloaded",
+  "defaultMode": "the-arena",
+  "modes": [
+    {
+      "id": "the-arena",
+      "expectedDeckSlots": 30
+    },
+    {
+      "id": "underground",
+      "expectedDeckSlots": 30,
+      "redraft": {
+        "pickRounds": 5,
+        "discardCount": 5
+      }
+    }
+  ]
+}

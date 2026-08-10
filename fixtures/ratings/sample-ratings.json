@@ -1,0 +1,10 @@
+{
+  "provider": "fixture-local-import",
+  "dataTimestamp": "2026-07-18T00:00:00Z",
+  "arenaSeason": "fixture",
+  "dataVersion": "1",
+  "ratings": [
+    { "cardId": "CS2_029", "class": "mage", "value": 82.5, "sampleSize": 1234, "label": "Strong" },
+    { "cardId": "EX1_116", "value": 65.0, "sampleSize": 456, "label": "Good" }
+  ]
+}

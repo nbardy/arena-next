@@ -1,0 +1,16 @@
+[package]
+name = "hs-observer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+hs-card-data = { path = "../hs-card-data" }
+hs-log-parser = { path = "../hs-log-parser" }
+hs-paths = { path = "../hs-paths" }
+hs-state = { path = "../hs-state" }

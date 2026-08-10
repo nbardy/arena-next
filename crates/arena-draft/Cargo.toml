@@ -1,0 +1,14 @@
+[package]
+name = "arena-draft"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+hs-state = { path = "../hs-state" }
+hs-card-data = { path = "../hs-card-data" }
+
+[dev-dependencies]
+serde_json.workspace = true

@@ -1,0 +1,11 @@
+[package]
+name = "arena-popup"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Platform-neutral status popup model and layout for ArenaNext"
+
+[dependencies]
+serde.workspace = true
+

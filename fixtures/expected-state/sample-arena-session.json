@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 9,
+  "mode": "arena",
+  "heroClass": "mage",
+  "deck": [
+    { "cardId": "CS2_029", "count": 1 },
+    { "cardId": "ETC_528", "count": 2 },
+    { "cardId": "EX1_116", "count": 1 },
+    { "cardId": "REV_840", "count": 2 },
+    { "cardId": "TOY_037", "count": 2 }
+  ],
+  "deckState": {
+    "expectedSlots": 8,
+    "observedSlots": 8,
+    "unobservedSlots": 0,
+    "completeness": { "status": "complete" }
+  },
+  "run": {
+    "draftDeckId": "507495951",
+    "deckSnapshotComplete": true,
+    "stateOrigin": "replay",
+    "draftMode": "ACTIVE_DRAFT_DECK",
+    "draftPhase": "active_deck"
+  },
+  "draft": {
+    "historyStatus": { "status": "unknown" },
+    "phaseProgressStatus": "unknown",
+    "pickNumber": 0,
+    "phasePickCount": 1,
+    "redraft": {
+      "stage": "inactive",
+      "pickRoundsRequired": null,
+      "pickProgressKnown": false,
+      "pickRoundsCompleted": 0,
+      "discardCountRequired": null,
+      "discardedCardIds": []
+    },
+    "currentOffer": null,
+    "offers": [],
+    "selected": "CS2_029",
+    "selections": ["CS2_029"]
+  },
+  "game": {
+    "active": false,
+    "result": "unknown"
+  }
+}

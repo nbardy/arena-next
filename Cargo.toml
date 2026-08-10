@@ -1,0 +1,53 @@
+[workspace]
+resolver = "2"
+members = [
+  "apps/arena-next",
+  "crates/arena-analysis",
+  "crates/arena-draft",
+  "crates/arena-rules",
+  "crates/arena-scoring",
+  "crates/arena-popup",
+  "crates/hs-card-data",
+  "crates/hs-log-config",
+  "crates/hs-log-parser",
+  "crates/hs-observer",
+  "crates/hs-paths",
+  "crates/hs-state",
+  "platform/macos/capture",
+  "platform/macos/overlay-host",
+  "platform/windows/shell",
+]
+# Earlier experiments and the retired socket daemon remain outside the
+# supported workspace for historical reference only. The product is one native
+# AppKit executable; normal builds and tests do not compile a browser, daemon,
+# Tokio runtime, or HTTP updater.
+exclude = ["apps/hearthd", "spikes/tauri-desktop/src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-2.0-only"
+authors = ["ArenaNext contributors"]
+rust-version = "1.85"
+
+[workspace.dependencies]
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+regex = "1.11"
+ureq = { version = "3.1", default-features = false, features = ["rustls", "gzip"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+
+# The release artifact is a native local utility, not a browser-hosted app.
+# Favor a small, single Mach-O by default. Initial historical-log replay is
+# measured separately from the near-zero-cost incremental tail path; do not
+# trade size for a claimed performance gain without that stage profile.
+[profile.release]
+opt-level = "z"
+# Thin LTO keeps native release builds practical during iteration while the
+# measured arm64 observer remains compact (about 3.4 MB before AppKit UI).
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"

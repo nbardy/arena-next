@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "source": "sanitized-fixture",
+  "dataVersion": "2026.07.fixture",
+  "cards": [
+    {
+      "cardId": "REV_840",
+      "tags": ["synergy:elemental"]
+    },
+    {
+      "cardId": "ETC_528",
+      "tags": ["card_draw"]
+    },
+    {
+      "cardId": "TOY_037",
+      "tags": ["removal"]
+    },
+    {
+      "cardId": "CS2_029",
+      "tags": ["removal", "reach"]
+    },
+    {
+      "cardId": "EX1_116",
+      "tags": ["reach"]
+    }
+  ]
+}

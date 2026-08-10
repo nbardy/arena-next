@@ -1,0 +1,3 @@
+D 19:14:42.0000000 LoadingScreen.OnSceneLoaded - ARENA
+D 19:15:10.0000000 LoadingScreen.OnSceneLoaded - HUB -> GAMEPLAY
+D 19:20:10.0000000 LoadingScreen.OnSceneLoaded - GAMEPLAY -> HUB

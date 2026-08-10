@@ -1,0 +1,13 @@
+D 19:14:43.0000000 DraftManager.OnChosen(): hero=HERO_08 premium=STANDARD
+D 19:14:44.0000000 SetDraftMode - DRAFTING
+D 19:14:45.0000000 Client chooses: Fireball (CS2_029)
+D 19:14:46.0000000 DraftManager.OnChoicesAndContents - Draft Deck ID: 507495951, Hero Card = HERO_08
+D 19:14:46.1000000 DraftManager.OnChoicesAndContents - Draft deck contains card REV_840
+D 19:14:46.2000000 DraftManager.OnChoicesAndContents - Draft deck contains card REV_840
+D 19:14:46.3000000 DraftManager.OnChoicesAndContents - Draft deck contains card ETC_528
+D 19:14:46.4000000 DraftManager.OnChoicesAndContents - Draft deck contains card ETC_528
+D 19:14:46.5000000 DraftManager.OnChoicesAndContents - Draft deck contains card TOY_037
+D 19:14:46.6000000 DraftManager.OnChoicesAndContents - Draft deck contains card TOY_037
+D 19:14:46.7000000 DraftManager.OnChoicesAndContents - Draft deck contains card CS2_029
+D 19:14:46.8000000 DraftManager.OnChoicesAndContents - Draft deck contains card EX1_116
+D 19:14:47.0000000 SetDraftMode - ACTIVE_DRAFT_DECK

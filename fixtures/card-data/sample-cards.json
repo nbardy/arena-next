@@ -1,0 +1,58 @@
+{
+  "formatVersion": 1,
+  "source": "sanitized-fixture",
+  "dataVersion": "2026.07.fixture",
+  "updatedAt": "2026-07-18T00:00:00Z",
+  "cards": [
+    {
+      "id": "REV_840",
+      "name": "Fixture Reverb",
+      "cost": 3,
+      "cardType": "MINION",
+      "classes": ["MAGE"],
+      "collectible": true,
+      "set": "REVENDRETH",
+      "dbfId": 840
+    },
+    {
+      "id": "ETC_528",
+      "name": "Fixture Encore",
+      "cost": 4,
+      "cardType": "SPELL",
+      "classes": ["MAGE"],
+      "collectible": true,
+      "set": "FESTIVAL",
+      "dbfId": 528
+    },
+    {
+      "id": "TOY_037",
+      "name": "Fixture Toy",
+      "cost": 2,
+      "cardType": "MINION",
+      "classes": ["NEUTRAL"],
+      "collectible": true,
+      "set": "WHIZBANG",
+      "dbfId": 37
+    },
+    {
+      "id": "CS2_029",
+      "name": "Fireball",
+      "cost": 4,
+      "cardType": "SPELL",
+      "classes": ["MAGE"],
+      "collectible": true,
+      "set": "CORE",
+      "dbfId": 315
+    },
+    {
+      "id": "EX1_116",
+      "name": "Leeroy Jenkins",
+      "cost": 5,
+      "cardType": "MINION",
+      "classes": ["NEUTRAL"],
+      "collectible": true,
+      "set": "EXPERT1",
+      "dbfId": 116
+    }
+  ]
+}

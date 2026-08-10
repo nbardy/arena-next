@@ -1,0 +1,24 @@
+[package]
+name = "arena-next-macos-capture"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-2.0-only"
+rust-version = "1.85"
+description = "Small, direct-window ScreenCaptureKit foundation for ArenaNext on macOS"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+# This is deliberately a small framework leaf. It has no browser runtime,
+# image-matching engine, file-system access, process inspection, or async
+# runtime. Every Apple binding disables default features and enables only the
+# symbols used for a direct, one-shot window capture.
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = { version = "0.6.2", default-features = false, features = ["alloc"] }
+objc2 = { version = "0.6.4", default-features = false, features = ["std"] }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["alloc", "CFData", "CFCGTypes", "objc2"] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["CGDataProvider", "CGImage", "CGWindow", "objc2"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSArray", "NSError", "NSString", "alloc"] }
+objc2-screen-capture-kit = { version = "0.3.2", default-features = false, features = ["SCShareableContent", "SCScreenshotManager", "SCStream", "block2", "objc2-core-foundation", "objc2-core-graphics", "std"] }
+objc2-vision = { version = "0.3.2", default-features = false, features = ["VNObservation", "VNRecognizeTextRequest", "VNRequest", "VNRequestHandler", "VNTypes", "objc2-core-foundation", "objc2-core-graphics", "std"] }

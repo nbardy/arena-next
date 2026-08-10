@@ -1,0 +1,2 @@
+D 19:15:10.1000000 GameState.DebugPrintPower() - CREATE_GAME
+D 19:20:09.9000000 GameState.DebugPrintPower() - TAG_CHANGE Entity=Player tag=PLAYSTATE value=WON

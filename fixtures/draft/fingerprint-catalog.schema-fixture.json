@@ -1,0 +1,7 @@
+{
+  "algorithm": "dhash_luma_v1",
+  "cards": [
+    { "cardId": "CS2_029", "hash": "0123456789abcdef" },
+    { "cardId": "EX1_116", "hash": "fedcba9876543210" }
+  ]
+}
