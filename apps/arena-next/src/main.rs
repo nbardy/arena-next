@@ -974,6 +974,7 @@ fn starting_model() -> model::NativeOverlayModel {
 }
 
 const DRAFT_CAPTURE_INTERVAL: Duration = Duration::from_millis(800);
+const CONFIRMED_OFFER_RECHECK_INTERVAL: Duration = Duration::from_millis(1500);
 const STALE_RATING_AFTER_DAYS: i64 = 60;
 
 /// Identifies one unresolved visible draft offer without putting any
@@ -988,6 +989,7 @@ struct DraftKey {
     phase: hs_state::ArenaDraftPhase,
     pick_number: u8,
     phase_pick_count: u8,
+    observed_slots: u16,
 }
 
 /// App-owned, optional direct-window draft matcher.
@@ -1042,6 +1044,7 @@ struct OfferOcrWorker {
     facts: AnalysisFacts,
     current_key: Option<DraftKey>,
     pending: Option<[String; 3]>,
+    confirmed_ids: Option<[String; 3]>,
     latest: Option<OfferOverlayState>,
     current_window: Option<arena_next_macos_capture::GameWindow>,
     confirmed: bool,
@@ -1063,6 +1066,7 @@ impl OfferOcrWorker {
                 .unwrap_or_else(AnalysisFacts::empty),
             current_key: None,
             pending: None,
+            confirmed_ids: None,
             latest: None,
             current_window: None,
             confirmed: false,
@@ -1073,6 +1077,7 @@ impl OfferOcrWorker {
     fn reset(&mut self) {
         self.current_key = None;
         self.pending = None;
+        self.confirmed_ids = None;
         self.latest = None;
         self.current_window = None;
         self.confirmed = false;
@@ -1087,6 +1092,7 @@ impl OfferOcrWorker {
         if self.current_key.as_ref() != Some(&key) {
             self.current_key = Some(key);
             self.pending = None;
+            self.confirmed_ids = None;
             self.current_window = self
                 .capture
                 .find_hearthstone_windows()
@@ -1099,12 +1105,14 @@ impl OfferOcrWorker {
             self.last_capture_at = None;
             self.confirmed = false;
         }
-        if self.confirmed {
-            return self.latest.clone();
-        }
+        let capture_interval = if self.confirmed {
+            CONFIRMED_OFFER_RECHECK_INTERVAL
+        } else {
+            DRAFT_CAPTURE_INTERVAL
+        };
         if self
             .last_capture_at
-            .is_some_and(|last| last.elapsed() < DRAFT_CAPTURE_INTERVAL)
+            .is_some_and(|last| last.elapsed() < capture_interval)
         {
             return self.latest.clone();
         }
@@ -1113,7 +1121,10 @@ impl OfferOcrWorker {
             Ok(result) => result,
             Err(error) => {
                 eprintln!("ArenaNext offer OCR retry: {error:#}");
-                if let Some(window) = &self.current_window {
+                app_log(format!("offer OCR retry: {error:#}"));
+                if !self.confirmed
+                    && let Some(window) = &self.current_window
+                {
                     self.latest = self
                         .status_overlay(window, "Reading offer…\nScanning card titles")
                         .ok();
@@ -1122,16 +1133,27 @@ impl OfferOcrWorker {
             }
         };
         self.current_window = Some(window.clone());
+        if self.confirmed_ids.as_ref() == Some(&ids) {
+            self.pending = None;
+            return self.latest.clone();
+        }
         if self.pending.as_ref() != Some(&ids) {
             self.pending = Some(ids);
+            self.confirmed_ids = None;
+            self.confirmed = false;
             self.latest = self
                 .status_overlay(&window, "Reading offer…\nConfirming match")
                 .ok();
             return self.latest.clone();
         }
         self.pending = None;
+        let confirmed_ids = ids.clone();
         self.latest = self.render(snapshot, ids, window).ok();
         self.confirmed = self.latest.is_some();
+        self.confirmed_ids = self.confirmed.then_some(confirmed_ids.clone());
+        if self.confirmed {
+            app_log(format!("offer OCR confirmed {}", confirmed_ids.join(", ")));
+        }
         self.latest.clone()
     }
 
@@ -1843,6 +1865,7 @@ fn unresolved_draft_key(snapshot: &ObserverSnapshot) -> Option<DraftKey> {
         phase,
         pick_number: visible_draft_pick_number(snapshot),
         phase_pick_count: snapshot.draft.phase_pick_count,
+        observed_slots: snapshot.deck_state.observed_slots,
     })
 }
 
