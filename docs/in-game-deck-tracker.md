@@ -51,3 +51,10 @@ HearthstoneJSON image API on a background thread and caches it at:
 
 Later hovers are local. A failed fetch leaves the row and tracker usable and
 records the failure in `~/Library/Logs/ArenaNext/app.log`.
+
+During drafting, the sidebar's anchored `N/30` counter can establish deck
+capacity even when OCR cannot uniquely resolve every visible card name. Two
+matching reads are required. This updates only the non-destructive capacity;
+the deck multiset is replaced only when every counted card is resolved, so a
+partial or scrolling sidebar cannot delete cards while deck-aware scoring no
+longer mistakes the starter package for a finished deck.

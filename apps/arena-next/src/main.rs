@@ -1019,8 +1019,16 @@ struct DeckSidebarWorker {
     cards: CardCache,
     current_run: Option<String>,
     pending: Option<(BTreeMap<String, u8>, u8)>,
+    pending_count: Option<arena_draft::DeckCount>,
     last_capture_at: Option<Instant>,
     last_activation_generation: u64,
+}
+
+#[cfg(target_os = "macos")]
+struct DeckSidebarUpdate {
+    card_ids: Option<Vec<String>>,
+    observed_slots: u16,
+    expected_slots: u16,
 }
 
 /// Reads the three visible card-title ribbons with Apple Vision, resolves
@@ -1475,6 +1483,7 @@ impl DeckSidebarWorker {
             cards,
             current_run: None,
             pending: None,
+            pending_count: None,
             last_capture_at: None,
             last_activation_generation: 0,
         }
@@ -1483,6 +1492,7 @@ impl DeckSidebarWorker {
     fn reset(&mut self) {
         self.current_run = None;
         self.pending = None;
+        self.pending_count = None;
         self.last_capture_at = None;
     }
 
@@ -1491,28 +1501,35 @@ impl DeckSidebarWorker {
         snapshot: &ObserverSnapshot,
         activation_generation: u64,
         picks_enabled: bool,
-    ) -> Option<(Vec<String>, u16, u16)> {
+    ) -> Option<DeckSidebarUpdate> {
         let run = snapshot.run.draft_deck_id.clone();
         let new_run = run != self.current_run;
         if new_run {
             self.current_run = run.clone();
             self.pending = None;
+            self.pending_count = None;
             self.last_capture_at = None;
         }
         let activated = activation_generation != self.last_activation_generation;
         if activated {
             self.last_activation_generation = activation_generation;
             self.pending = None;
+            self.pending_count = None;
             self.last_capture_at = None;
         }
         run.as_ref()?;
 
         // Before a baseline, keep retrying while the hero/package screens
         // transition. Afterward, capture only on activation or a new run.
-        if picks_enabled && !activated && !new_run {
+        if picks_enabled
+            && !activated
+            && !new_run
+            && self.pending.is_none()
+            && self.pending_count.is_none()
+        {
             return None;
         }
-        let interval = if self.pending.is_some() {
+        let interval = if self.pending.is_some() || self.pending_count.is_some() {
             Duration::from_millis(400)
         } else {
             Duration::from_secs(2)
@@ -1527,23 +1544,32 @@ impl DeckSidebarWorker {
 
         let reading = self.capture_once().ok()?;
         let count = reading.count?;
-        let counts = reading.authoritative_counts()?;
+        let count_confirmed = self.pending_count == Some(count);
+        self.pending_count = Some(count);
+        let Some(counts) = reading.authoritative_counts() else {
+            return count_confirmed.then_some(DeckSidebarUpdate {
+                card_ids: None,
+                observed_slots: u16::from(count.observed),
+                expected_slots: u16::from(count.capacity),
+            });
+        };
         let signature = (counts, count.observed);
         if self.pending.as_ref() != Some(&signature) {
             self.pending = Some(signature);
             return None;
         }
         self.pending = None;
+        self.pending_count = None;
 
         let mut card_ids = Vec::with_capacity(usize::from(count.observed));
         for (card_id, quantity) in signature.0 {
             card_ids.extend(std::iter::repeat_n(card_id, usize::from(quantity)));
         }
-        (card_ids.len() == usize::from(count.observed)).then_some((
-            card_ids,
-            u16::from(count.observed),
-            u16::from(count.capacity),
-        ))
+        (card_ids.len() == usize::from(count.observed)).then_some(DeckSidebarUpdate {
+            card_ids: Some(card_ids),
+            observed_slots: u16::from(count.observed),
+            expected_slots: u16::from(count.capacity),
+        })
     }
 
     fn capture_once(&self) -> Result<arena_draft::SidebarDeckRead> {
@@ -2015,15 +2041,22 @@ fn start_observer(options: &Options) -> Result<(Arc<RwLock<SharedObserverState>>
                     .err()
                     .map(|error| error.to_string());
                 let mut snapshot = observer.snapshot();
-                if let Some((card_ids, observed_slots, expected_slots)) = sidebar_worker.update(
+                if let Some(update) = sidebar_worker.update(
                     &snapshot,
                     worker_activation_generation.load(Ordering::Relaxed),
                     observer.arena_picks_enabled(),
                 ) {
-                    if observer
-                        .apply_complete_sidebar_baseline(card_ids, observed_slots, expected_slots)
-                        .is_ok()
-                    {
+                    let applied = if let Some(card_ids) = update.card_ids {
+                        observer.apply_complete_sidebar_baseline(
+                            card_ids,
+                            update.observed_slots,
+                            update.expected_slots,
+                        )
+                    } else {
+                        observer
+                            .apply_sidebar_capacity(update.observed_slots, update.expected_slots)
+                    };
+                    if applied.is_ok() {
                         checkpoint_error = observer
                             .write_checkpoint(&checkpoint_path)
                             .err()
@@ -2061,21 +2094,24 @@ fn start_observer(options: &Options) -> Result<(Arc<RwLock<SharedObserverState>>
                                     .map(|error| error.to_string());
                             }
                             let mut snapshot = observer.snapshot();
-                            if let Some((card_ids, observed_slots, expected_slots)) = sidebar_worker
-                                .update(
-                                    &snapshot,
-                                    worker_activation_generation.load(Ordering::Relaxed),
-                                    observer.arena_picks_enabled(),
-                                )
-                            {
-                                if observer
-                                    .apply_complete_sidebar_baseline(
+                            if let Some(update) = sidebar_worker.update(
+                                &snapshot,
+                                worker_activation_generation.load(Ordering::Relaxed),
+                                observer.arena_picks_enabled(),
+                            ) {
+                                let applied = if let Some(card_ids) = update.card_ids {
+                                    observer.apply_complete_sidebar_baseline(
                                         card_ids,
-                                        observed_slots,
-                                        expected_slots,
+                                        update.observed_slots,
+                                        update.expected_slots,
                                     )
-                                    .is_ok()
-                                {
+                                } else {
+                                    observer.apply_sidebar_capacity(
+                                        update.observed_slots,
+                                        update.expected_slots,
+                                    )
+                                };
+                                if applied.is_ok() {
                                     checkpoint_error = observer
                                         .write_checkpoint(&checkpoint_path)
                                         .err()

@@ -961,6 +961,27 @@ impl SessionObserver {
         self.parser.arena_picks_enabled()
     }
 
+    /// Applies only the deck capacity proven by an anchored `N/30` sidebar
+    /// counter. A partial or ambiguous card-name read may establish this
+    /// non-destructive rule without replacing any cards in reducer state.
+    pub fn apply_sidebar_capacity(
+        &mut self,
+        observed_slots: u16,
+        expected_slots: u16,
+    ) -> Result<bool> {
+        if self.reducer.snapshot().run.draft_deck_id.is_none() {
+            anyhow::bail!("cannot apply a deck capacity before an Arena run is identified");
+        }
+        if expected_slots == 0 || observed_slots > expected_slots {
+            anyhow::bail!(
+                "sidebar count {observed_slots}/{expected_slots} is not a valid deck capacity"
+            );
+        }
+        let before = self.reducer.snapshot().deck_state.expected_slots;
+        self.reducer.set_expected_deck_slots(Some(expected_slots));
+        Ok(before != Some(expected_slots))
+    }
+
     /// Replaces only the current deck multiset from a complete, validated
     /// Hearthstone sidebar reading, then enables future Arena pick records.
     ///
@@ -1693,6 +1714,17 @@ impl LiveObserver {
     ) -> Result<bool> {
         self.tailer
             .apply_complete_sidebar_baseline(card_ids, observed_slots, expected_slots)
+    }
+
+    /// Applies a validated sidebar capacity without replacing a partial deck
+    /// reading or changing the Arena-pick parser gate.
+    pub fn apply_sidebar_capacity(
+        &mut self,
+        observed_slots: u16,
+        expected_slots: u16,
+    ) -> Result<bool> {
+        self.tailer
+            .apply_sidebar_capacity(observed_slots, expected_slots)
     }
 
     /// Set or clear the selected mode's Redraft policy. Clearing is
@@ -2460,6 +2492,26 @@ mod tests {
         );
         assert_eq!(observer.state().deck_state.observed_slots, 0);
         assert!(!observer.arena_picks_enabled());
+        fs::remove_dir_all(session).unwrap();
+    }
+
+    #[test]
+    fn partial_sidebar_can_prove_capacity_without_replacing_cards() {
+        let session = temp_session();
+        fs::write(
+            session.join("Arena.log"),
+            "D 12:00:00.0000000 OnBegin - Got new draft deck with ID: 42\nD 12:00:01.0000000 Client chooses: Fireball (CS2_029)\n",
+        )
+        .unwrap();
+        let mut observer = SessionObserver::attach(&session).unwrap();
+        let before = observer.state().deck.clone();
+
+        assert!(observer.apply_sidebar_capacity(9, 30).unwrap());
+        assert_eq!(observer.state().deck, before);
+        assert_eq!(observer.state().deck_state.expected_slots, Some(30));
+        assert!(!observer.arena_picks_enabled());
+        assert!(observer.apply_sidebar_capacity(31, 30).is_err());
+
         fs::remove_dir_all(session).unwrap();
     }
 
