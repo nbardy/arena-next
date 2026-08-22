@@ -12,7 +12,7 @@
 //! should marshal model updates onto its main-thread event loop.
 
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     error::Error,
     fmt,
     marker::PhantomData,
@@ -29,10 +29,10 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSAlert, NSAlertStyle, NSAnyEventMask, NSApplication, NSApplicationActivationPolicy,
-    NSAutoresizingMaskOptions, NSBackingStoreType, NSBox, NSButton, NSColor, NSEventMask, NSFont,
-    NSImage, NSImageView, NSPanel, NSPopover, NSPopoverBehavior, NSProgressIndicator,
-    NSProgressIndicatorStyle, NSScreen, NSStatusBar, NSStatusWindowLevel, NSTextField,
-    NSVariableStatusItemLength, NSView, NSViewController, NSWindowCollectionBehavior,
+    NSAutoresizingMaskOptions, NSBackingStoreType, NSBox, NSButton, NSColor, NSEvent, NSEventMask,
+    NSFont, NSImage, NSImageScaling, NSImageView, NSPanel, NSPopover, NSPopoverBehavior,
+    NSProgressIndicator, NSProgressIndicatorStyle, NSScreen, NSStatusBar, NSStatusWindowLevel,
+    NSTextField, NSVariableStatusItemLength, NSView, NSViewController, NSWindowCollectionBehavior,
     NSWindowStyleMask, NSWorkspace,
 };
 use objc2_foundation::{
@@ -191,6 +191,16 @@ impl OverlayBounds {
 pub struct OverlayModel {
     pub title: String,
     pub lines: Vec<String>,
+    pub deck_rows: Vec<DeckRow>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DeckRow {
+    pub card_id: String,
+    pub mana_cost: Option<u8>,
+    pub name: String,
+    pub count: u8,
+    pub preview_image_path: Option<String>,
 }
 
 impl OverlayModel {
@@ -301,6 +311,11 @@ pub struct OverlayHost {
     offer_score_values: Vec<Retained<NSTextField>>,
     offer_score_spinners: Vec<Retained<NSProgressIndicator>>,
     label: Retained<NSTextField>,
+    deck_row_labels: Vec<Retained<NSTextField>>,
+    deck_rows: RefCell<Vec<DeckRow>>,
+    preview_panel: Retained<NSPanel>,
+    preview_image: Retained<NSImageView>,
+    preview_status: Retained<NSTextField>,
     action_button: Retained<NSButton>,
     popup: Retained<NSPopover>,
     _popup_controller: Retained<NSViewController>,
@@ -375,6 +390,40 @@ impl OverlayHost {
         if let Some(content_view) = content_view {
             let label_view: &NSView = &label;
             content_view.addSubview(label_view);
+        }
+
+        let mut deck_row_labels = Vec::with_capacity(30);
+        if let Some(content_view) = panel.contentView() {
+            for _ in 0..30 {
+                let row = NSTextField::labelWithString(&NSString::from_str(""), main_thread);
+                configure_deck_row(&row);
+                row.setHidden(true);
+                content_view.addSubview(&row);
+                deck_row_labels.push(row);
+            }
+        }
+
+        let preview_panel = NSPanel::initWithContentRect_styleMask_backing_defer(
+            NSPanel::alloc(main_thread),
+            OverlayBounds::new(0.0, 0.0, 256.0, 384.0).ns_rect(),
+            NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel,
+            NSBackingStoreType::Buffered,
+            false,
+        );
+        configure_score_panel(&preview_panel);
+        let preview_image = NSImageView::initWithFrame(
+            NSImageView::alloc(main_thread),
+            NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(256.0, 384.0)),
+        );
+        preview_image.setImageScaling(NSImageScaling::ScaleProportionallyUpOrDown);
+        let preview_status = NSTextField::wrappingLabelWithString(
+            &NSString::from_str("Loading card preview…"),
+            main_thread,
+        );
+        configure_preview_status(&preview_status);
+        if let Some(content_view) = preview_panel.contentView() {
+            content_view.addSubview(&preview_image);
+            content_view.addSubview(&preview_status);
         }
 
         // Keep the large text panel click-through, but place the recovery
@@ -591,6 +640,11 @@ impl OverlayHost {
             offer_score_values,
             offer_score_spinners,
             label,
+            deck_row_labels,
+            deck_rows: RefCell::new(Vec::new()),
+            preview_panel,
+            preview_image,
+            preview_status,
             action_button,
             popup,
             _popup_controller: popup_controller,
@@ -613,6 +667,7 @@ impl OverlayHost {
         require_main_thread()?;
         self.panel.orderFrontRegardless();
         self.fix_deck_panel.orderFrontRegardless();
+        self.update_hover_preview()?;
         Ok(())
     }
 
@@ -622,6 +677,7 @@ impl OverlayHost {
         self.panel.orderOut(None);
         self.fix_deck_panel.orderOut(None);
         self.hide_offer_scores()?;
+        self.preview_panel.orderOut(None);
         Ok(())
     }
 
@@ -817,6 +873,7 @@ impl OverlayHost {
         self.fix_deck_panel
             .setFrame_display(fix_deck_panel_frame(bounds), true);
         self.label.setFrame(label_frame(bounds));
+        self.layout_deck_rows(bounds);
         self.action_button.setFrame(action_button_frame());
         Ok(())
     }
@@ -827,6 +884,111 @@ impl OverlayHost {
         require_main_thread()?;
         let text = NSString::from_str(&model.display_text());
         self.label.setStringValue(&text);
+        *self.deck_rows.borrow_mut() = model.deck_rows.clone();
+        self.layout_deck_rows(self.current_bounds());
+        for (index, label) in self.deck_row_labels.iter().enumerate() {
+            if let Some(row) = model.deck_rows.get(index) {
+                label.setStringValue(&NSString::from_str(&format!(
+                    "{:>2}   {}{}",
+                    row.mana_cost
+                        .map(|cost| cost.to_string())
+                        .unwrap_or_else(|| "—".to_owned()),
+                    row.name,
+                    if row.count > 1 {
+                        format!("  ×{}", row.count)
+                    } else {
+                        String::new()
+                    }
+                )));
+                label.setHidden(false);
+            } else {
+                label.setHidden(true);
+            }
+        }
+        self.update_hover_preview()?;
+        Ok(())
+    }
+
+    /// Returns the card row currently under the global cursor while keeping
+    /// the overlay click-through. The caller may use this to populate a local
+    /// preview cache asynchronously.
+    pub fn hovered_card_id(&self) -> Result<Option<String>, OverlayError> {
+        require_main_thread()?;
+        if !self.panel.isVisible() {
+            return Ok(None);
+        }
+        let mouse = NSEvent::mouseLocation();
+        let panel_frame = self.panel.frame();
+        let local = NSPoint::new(
+            mouse.x - panel_frame.origin.x,
+            mouse.y - panel_frame.origin.y,
+        );
+        let rows = self.deck_rows.borrow();
+        Ok(self
+            .deck_row_labels
+            .iter()
+            .zip(rows.iter())
+            .find(|(label, _)| {
+                let frame = label.frame();
+                !label.isHidden()
+                    && local.x >= frame.origin.x
+                    && local.x <= frame.origin.x + frame.size.width
+                    && local.y >= frame.origin.y
+                    && local.y <= frame.origin.y + frame.size.height
+            })
+            .map(|(_, row)| row.card_id.clone()))
+    }
+
+    fn current_bounds(&self) -> OverlayBounds {
+        let frame = self.panel.frame();
+        OverlayBounds::new(
+            frame.origin.x,
+            frame.origin.y,
+            frame.size.width,
+            frame.size.height,
+        )
+    }
+
+    fn layout_deck_rows(&self, bounds: OverlayBounds) {
+        let header_lines = self.label.stringValue().to_string().lines().count().max(1);
+        for (index, label) in self.deck_row_labels.iter().enumerate() {
+            label.setFrame(deck_row_frame(bounds, index, header_lines));
+        }
+    }
+
+    fn update_hover_preview(&self) -> Result<(), OverlayError> {
+        let Some(card_id) = self.hovered_card_id()? else {
+            self.preview_panel.orderOut(None);
+            return Ok(());
+        };
+        let rows = self.deck_rows.borrow();
+        let Some(row) = rows.iter().find(|row| row.card_id == card_id) else {
+            self.preview_panel.orderOut(None);
+            return Ok(());
+        };
+        let bounds = self.current_bounds();
+        self.preview_panel.setFrame_display(
+            NSRect::new(
+                NSPoint::new(bounds.x + bounds.width + 8.0, bounds.y + 30.0),
+                NSSize::new(256.0, 384.0),
+            ),
+            true,
+        );
+        if let Some(path) = row.preview_image_path.as_deref()
+            && let Some(image) =
+                NSImage::initWithContentsOfFile(NSImage::alloc(), &NSString::from_str(path))
+        {
+            self.preview_image.setImage(Some(&image));
+            self.preview_image.setHidden(false);
+            self.preview_status.setHidden(true);
+        } else {
+            self.preview_image.setImage(None);
+            self.preview_image.setHidden(true);
+            self.preview_status
+                .setStringValue(&NSString::from_str(&format!("Loading {}…", row.name)));
+            self.preview_status.setHidden(false);
+        }
+        self.preview_panel.orderFrontRegardless();
         Ok(())
     }
 
@@ -1044,6 +1206,43 @@ fn configure_label(label: &NSTextField, bounds: OverlayBounds) {
     label.setMaximumNumberOfLines(0);
 }
 
+fn configure_deck_row(label: &NSTextField) {
+    label.setDrawsBackground(true);
+    label.setBackgroundColor(Some(&NSColor::colorWithCalibratedWhite_alpha(0.04, 0.72)));
+    label.setBordered(false);
+    label.setBezeled(false);
+    label.setEditable(false);
+    label.setSelectable(false);
+    label.setTextColor(Some(&NSColor::whiteColor()));
+    label.setFont(Some(&NSFont::systemFontOfSize(13.0)));
+    label.setMaximumNumberOfLines(1);
+}
+
+fn configure_preview_status(label: &NSTextField) {
+    label.setFrame(NSRect::new(
+        NSPoint::new(18.0, 160.0),
+        NSSize::new(220.0, 64.0),
+    ));
+    label.setDrawsBackground(false);
+    label.setBordered(false);
+    label.setBezeled(false);
+    label.setEditable(false);
+    label.setSelectable(false);
+    label.setTextColor(Some(&NSColor::whiteColor()));
+    label.setFont(Some(&NSFont::boldSystemFontOfSize(14.0)));
+}
+
+fn deck_row_frame(bounds: OverlayBounds, index: usize, header_lines: usize) -> NSRect {
+    const ROW_HEIGHT: f64 = 17.0;
+    const HEADER_LINE_HEIGHT: f64 = 19.0;
+    let width = (bounds.width - 2.0 * CONTENT_PADDING).max(1.0);
+    let top = bounds.height - CONTENT_PADDING - header_lines as f64 * HEADER_LINE_HEIGHT - 6.0;
+    NSRect::new(
+        NSPoint::new(CONTENT_PADDING, top - (index as f64 + 1.0) * ROW_HEIGHT),
+        NSSize::new(width, ROW_HEIGHT - 1.0),
+    )
+}
+
 fn configure_action_button(button: &NSButton) {
     button.setFrame(action_button_frame());
     button.setFont(Some(&NSFont::systemFontOfSize(12.0)));
@@ -1091,6 +1290,7 @@ mod tests {
                 " ".to_owned(),
                 "Frostbolt — 75".to_owned(),
             ],
+            deck_rows: Vec::new(),
         };
 
         assert_eq!(

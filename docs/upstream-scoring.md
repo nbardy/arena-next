@@ -43,7 +43,9 @@ Each importer writes its own cache (`heartharena-ratings.json`,
 `hsreplay-ratings.json`, `firestone-ratings.json`) in the ArenaNext app-data
 directory. `load_live_ratings` joins whichever of those caches exist (or the
 single file named by `--ratings`) into a composite. Imports are explicit
-commands only; normal overlay startup never touches the network.
+commands only. Normal overlay startup never touches the network; the separate
+user-triggered deck-row hover preview may fetch and cache one rendered card
+from HearthstoneJSON and does not send deck contents or scoring data.
 
 ## Composite normalization
 

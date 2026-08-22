@@ -9,7 +9,7 @@
 mod model;
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     env, fs,
     path::PathBuf,
     sync::{
@@ -377,6 +377,9 @@ fn print_help() {
     println!(
         "ArenaNext — small native Hearthstone Arena overlay\n\nUSAGE:\n  arena-next [--logs SESSION_DIR] [--cards CARD_CACHE] [--arena-rules RULES.json] [--arena-mode MODE] [--once] [--demo]\n  arena-next import-heartharena [--output RATINGS.json] [--json]\n  arena-next import-hsreplay [--output RATINGS.json] [--json]\n  arena-next import-firestone [--firestone-format arena|arena-underground] [--output RATINGS.json] [--json]\n  arena-next doctor [--logs SESSION_DIR] [--cards CARD_CACHE] [--arena-rules RULES.json] [--arena-mode MODE] [--json]\n  arena-next replay SESSION_DIR [--cards CARD_CACHE] [--arena-rules RULES.json] [--arena-mode MODE]\n  arena-next explain-card CARD_ID [--logs SESSION_DIR] [--cards CARD_CACHE] [--arena-rules RULES.json] [--arena-mode MODE] [--json]\n  arena-next analyze [--logs SESSION_DIR] [--cards CARD_CACHE] [--arena-rules RULES.json] [--analysis-facts FACTS.json] [--offer CARD_ID]... [--ratings RATINGS.json]\n\nOPTIONS:\n  import-heartharena            Explicitly fetch and cache all public HearthArena class scores\n  import-hsreplay               Explicitly fetch and cache the public HSReplay arena card stats\n  import-firestone              Explicitly fetch and cache Firestone's per-class arena card stats\n  --firestone-format FORMAT     Firestone arena format bucket (arena or arena-underground; default arena)\n  --output PATH                 Override the default rating-cache destination for the import\n  --logs PATH                  Read this log-session directory instead of discovering Hearthstone\n  --cards PATH                 Read this ArenaNext card-data cache instead of the default\n  --arena-rules PATH           Read a local versioned Arena rules manifest; never downloads data\n  --arena-mode ID              Select a manifest mode when it has no unambiguous default\n  --analysis-facts PATH        Read a local versioned semantic-facts file for analyze\n  --offer CARD_ID              Analyze one offered card counterfactually; repeat for each offer\n  --draft-fingerprints PATH    Enable local draft matching from this fingerprint catalog\n  --ratings PATH               Override the default cached ratings file\n  --once                       Print the current overlay model and exit; never opens a window\n  --demo                       Open a native static demo without touching Hearthstone\n  inspect, --inspect           Print paths, rules, and logging status; never changes a file\n  doctor                       Print a read-only installation, log, deck, catalog, and capture report\n  replay SESSION_DIR           Print a deterministic JSON state snapshot and exit\n  explain-card CARD_ID         Explain metadata and bounded log provenance for one card ID\n  analyze                      Emit deterministic deck profile and offered-card deltas; never calls an AI\n  --json                       Request JSON from diagnostic commands\n  --enable-logging             Explicitly merge required log.config settings and create a backup\n  --capture-status             Print Screen Recording/window-capture status; never prompts\n  --request-screen-recording   Explicitly ask macOS for Screen Recording access\n  --capture-window             Capture one current Hearthstone window in memory; never writes it\n  -h, --help                   Show this help\n  -V, --version                Show the application version\n\nArenaNext never changes Hearthstone logging automatically. `--enable-logging`\nonly merges the five required sections, writes atomically, creates a backup,\nand never restarts Hearthstone. Network access occurs only for the explicit\nimport-heartharena command; normal overlay startup uses the local cache."
     );
+    println!(
+        "Card preview exception: hovering a deck row explicitly fetches that card's 256px render once and caches it locally."
+    );
 }
 
 #[cfg(target_os = "macos")]
@@ -477,6 +480,20 @@ fn run_macos(options: Options) -> Result<()> {
         for line in native_model.lines {
             println!("{line}");
         }
+        for row in native_model.deck_rows {
+            println!(
+                "{:>2}  {}{}",
+                row.mana_cost
+                    .map(|cost| cost.to_string())
+                    .unwrap_or_else(|| "—".to_owned()),
+                row.name,
+                if row.count > 1 {
+                    format!(" ×{}", row.count)
+                } else {
+                    String::new()
+                }
+            );
+        }
         return Ok(());
     }
 
@@ -489,7 +506,7 @@ fn run_macos(options: Options) -> Result<()> {
         starting_model()
     };
     let overlay = OverlayHost::new(
-        OverlayBounds::new(24.0, 64.0, 360.0, 460.0),
+        OverlayBounds::new(24.0, 64.0, 360.0, 700.0),
         &appkit_model(native_model),
     )?;
     let (observer_state, activation_generation) = if options.demo {
@@ -503,6 +520,7 @@ fn run_macos(options: Options) -> Result<()> {
     let mut interactive = false;
     let mut popup_visible = false;
     let mut hearthstone_was_frontmost = false;
+    let mut requested_card_art = BTreeSet::new();
     overlay.run_with_tick(Duration::from_millis(200), move |host| {
         if let Some(command) = host.take_command()? {
             match command {
@@ -525,6 +543,18 @@ fn run_macos(options: Options) -> Result<()> {
             .map(current_model)
             .unwrap_or_else(demo_model);
         host.update_model(&appkit_model(model))?;
+        if let Some(card_id) = host.hovered_card_id()?
+            && requested_card_art.insert(card_id.clone())
+            && !default_card_art_path(&card_id).is_file()
+        {
+            thread::spawn(move || {
+                if let Err(error) = download_card_art(&card_id) {
+                    app_log(format!(
+                        "card preview download failed for {card_id}: {error:#}"
+                    ));
+                }
+            });
+        }
         let offer_overlay = observer_state
             .as_ref()
             .and_then(|state| state.read().ok()?.offer_overlay.clone());
@@ -930,6 +960,7 @@ fn demo_model() -> model::NativeOverlayModel {
             "No browser runtime".to_owned(),
             "Click-through · all Spaces · fullscreen auxiliary".to_owned(),
         ],
+        deck_rows: Vec::new(),
     }
 }
 
@@ -938,6 +969,7 @@ fn starting_model() -> model::NativeOverlayModel {
     model::NativeOverlayModel {
         title: "ArenaNext · starting".to_owned(),
         lines: vec!["Attaching to Hearthstone logs…".to_owned()],
+        deck_rows: Vec::new(),
     }
 }
 
@@ -2698,6 +2730,7 @@ fn current_model(state: &Arc<RwLock<SharedObserverState>>) -> model::NativeOverl
         return model::NativeOverlayModel {
             title: "ArenaNext · observer unavailable".to_owned(),
             lines: vec!["Observer state lock was unavailable".to_owned()],
+            deck_rows: Vec::new(),
         };
     };
     let mut model =
@@ -2725,7 +2758,60 @@ fn appkit_model(model: model::NativeOverlayModel) -> arena_next_macos_overlay::O
     arena_next_macos_overlay::OverlayModel {
         title: model.title,
         lines: model.lines,
+        deck_rows: model
+            .deck_rows
+            .into_iter()
+            .map(|row| arena_next_macos_overlay::DeckRow {
+                preview_image_path: default_card_art_path(&row.card_id)
+                    .is_file()
+                    .then(|| default_card_art_path(&row.card_id).display().to_string()),
+                card_id: row.card_id,
+                mana_cost: row.mana_cost,
+                name: row.name,
+                count: row.count,
+            })
+            .collect(),
     }
+}
+
+#[cfg(target_os = "macos")]
+fn default_card_art_path(card_id: &str) -> PathBuf {
+    default_app_data_dir()
+        .join("card-renders")
+        .join(format!("{card_id}.png"))
+}
+
+#[cfg(target_os = "macos")]
+fn download_card_art(card_id: &str) -> Result<()> {
+    if !card_id
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || character == '_')
+    {
+        bail!("invalid card ID for preview cache");
+    }
+    let path = default_card_art_path(card_id);
+    if path.is_file() {
+        return Ok(());
+    }
+    let url = format!("https://art.hearthstonejson.com/v1/render/latest/enUS/256x/{card_id}.png");
+    let mut response = ureq::get(&url)
+        .header(
+            "User-Agent",
+            concat!(
+                "HearthAI/",
+                env!("CARGO_PKG_VERSION"),
+                " (hover card preview)"
+            ),
+        )
+        .call()
+        .with_context(|| format!("could not fetch {url}"))?;
+    let bytes = response
+        .body_mut()
+        .read_to_vec()
+        .context("could not read card preview response")?;
+    let parent = path.parent().context("card preview path has no parent")?;
+    fs::create_dir_all(parent)?;
+    atomic_write(&path, &bytes)
 }
 
 #[cfg(target_os = "macos")]
@@ -2980,6 +3066,7 @@ mod tests {
             mode: hs_state::GameMode::Arena,
             hero_class: Some(hs_state::HeroClass::Mage),
             deck: Vec::new(),
+            remaining_deck: Vec::new(),
             deck_state: hs_state::DeckState::default(),
             run: hs_state::ArenaRunState {
                 draft_deck_id: Some("fixture-draft".to_owned()),

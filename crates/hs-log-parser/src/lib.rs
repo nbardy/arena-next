@@ -69,7 +69,10 @@ pub const REQUIRED_COMPONENTS: [LogComponent; 5] = [
 pub const fn component_can_emit_events(component: LogComponent) -> bool {
     matches!(
         component,
-        LogComponent::LoadingScreen | LogComponent::Power | LogComponent::Arena
+        LogComponent::LoadingScreen
+            | LogComponent::Power
+            | LogComponent::Zone
+            | LogComponent::Arena
     )
 }
 
@@ -579,7 +582,8 @@ fn component_might_emit_event(component: LogComponent, raw: &str) -> bool {
         LogComponent::Power => {
             raw.contains("CREATE_GAME") || (raw.contains("PLAYSTATE") && raw.contains("WON"))
         }
-        LogComponent::Zone | LogComponent::Asset => false,
+        LogComponent::Zone => raw.contains("zone from FRIENDLY") && raw.contains("DECK"),
+        LogComponent::Asset => false,
     }
 }
 
@@ -782,7 +786,8 @@ impl HearthstoneLogParser {
             LogComponent::Arena => self.parse_arena_line(&line.message),
             LogComponent::LoadingScreen => self.parse_loading_screen_line(&line.message),
             LogComponent::Power => self.parse_power_line(&line.message),
-            LogComponent::Zone | LogComponent::Asset => Vec::new(),
+            LogComponent::Zone => self.parse_zone_line(&line.message),
+            LogComponent::Asset => Vec::new(),
         }
     }
 
@@ -935,6 +940,32 @@ impl HearthstoneLogParser {
         }
         Vec::new()
     }
+
+    fn parse_zone_line(&mut self, message: &str) -> Vec<GameEvent> {
+        static FRIENDLY_ZONE_CHANGE: LazyLock<Regex> = LazyLock::new(|| {
+            Regex::new(
+                r"\[entityName=.*?\bid=(?P<entity>\d+)\s+zone=[A-Z]+\s+zonePos=\d+\s+cardId=(?P<card>[A-Za-z0-9_]+)\s+player=\d+\]\s+zone from FRIENDLY (?P<from>[A-Z]+) -> FRIENDLY (?P<to>[A-Z]+)",
+            )
+            .expect("valid friendly zone-change regex")
+        });
+        let Some(captures) = FRIENDLY_ZONE_CHANGE.captures(message) else {
+            return Vec::new();
+        };
+        let from = captures["from"].to_owned();
+        let to = captures["to"].to_owned();
+        if !from.eq_ignore_ascii_case("DECK") && !to.eq_ignore_ascii_case("DECK") {
+            return Vec::new();
+        }
+        let Some(entity_id) = captures["entity"].parse().ok() else {
+            return Vec::new();
+        };
+        vec![GameEvent::FriendlyCardZoneChanged {
+            entity_id,
+            card_id: captures["card"].to_owned(),
+            from,
+            to,
+        }]
+    }
 }
 
 #[cfg(test)]
@@ -984,6 +1015,45 @@ mod tests {
             events.last(),
             Some(GameEvent::ArenaDraftMode { .. })
         ));
+    }
+
+    #[test]
+    fn parses_only_friendly_deck_boundary_transitions() {
+        let mut parser = HearthstoneLogParser::default();
+        let draw = "D 16:16:16.1938520 ZoneChangeList.ProcessChanges() - id=4 local=False [entityName=Spiderling id=49 zone=HAND zonePos=0 cardId=JAIL_202 player=1] zone from FRIENDLY DECK -> FRIENDLY HAND";
+        let (_, message) = split_timestamp(draw);
+        let events = parser.parse_line(&RawLogLine {
+            component: LogComponent::Zone,
+            line_number: 1,
+            byte_offset: 0,
+            timestamp_key: None,
+            message: message.into(),
+            raw: draw.into(),
+        });
+        assert_eq!(
+            events,
+            vec![GameEvent::FriendlyCardZoneChanged {
+                entity_id: 49,
+                card_id: "JAIL_202".into(),
+                from: "DECK".into(),
+                to: "HAND".into(),
+            }]
+        );
+
+        let opponent = draw.replace("FRIENDLY", "OPPOSING");
+        let (_, message) = split_timestamp(&opponent);
+        assert!(
+            parser
+                .parse_line(&RawLogLine {
+                    component: LogComponent::Zone,
+                    line_number: 2,
+                    byte_offset: 0,
+                    timestamp_key: None,
+                    message: message.into(),
+                    raw: opponent,
+                })
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1268,6 +1338,6 @@ mod tests {
         assert!(component_can_emit_events(LogComponent::LoadingScreen));
         assert!(component_can_emit_events(LogComponent::Power));
         assert!(!component_can_emit_events(LogComponent::Asset));
-        assert!(!component_can_emit_events(LogComponent::Zone));
+        assert!(component_can_emit_events(LogComponent::Zone));
     }
 }

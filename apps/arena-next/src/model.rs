@@ -7,12 +7,19 @@
 use hs_card_data::CardResolution;
 use hs_observer::{ObserverSnapshot, ResolvedDeckCard};
 
-const MAX_DECK_LINES: usize = 12;
-
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct NativeOverlayModel {
     pub title: String,
     pub lines: Vec<String>,
+    pub deck_rows: Vec<NativeDeckRow>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NativeDeckRow {
+    pub card_id: String,
+    pub name: String,
+    pub mana_cost: Option<u8>,
+    pub count: u8,
 }
 
 /// Presentation produced by the app-owned screen-recognition worker.
@@ -158,20 +165,39 @@ pub fn from_snapshot_with_external_draft(
         lines.push("The provisional card union is not the current deck".to_owned());
     } else if snapshot.deck.is_empty() {
         lines.push("Waiting for an Arena deck or draft".to_owned());
+    }
+
+    let shown_deck = if snapshot.game.active {
+        &snapshot.remaining_deck
     } else {
-        lines.push("Current deck".to_owned());
-        lines.extend(snapshot.deck.iter().take(MAX_DECK_LINES).map(deck_line));
-        if snapshot.deck.len() > MAX_DECK_LINES {
+        &snapshot.deck
+    };
+    let mut deck_rows = shown_deck.iter().map(deck_row).collect::<Vec<_>>();
+    deck_rows.sort_by(|left, right| {
+        left.mana_cost
+            .unwrap_or(u8::MAX)
+            .cmp(&right.mana_cost.unwrap_or(u8::MAX))
+            .then_with(|| left.name.cmp(&right.name))
+            .then_with(|| left.card_id.cmp(&right.card_id))
+    });
+    if !deck_rows.is_empty() {
+        let remaining = deck_rows.iter().fold(0_u16, |total, row| {
+            total.saturating_add(u16::from(row.count))
+        });
+        if snapshot.game.active {
             lines.push(format!(
-                "… {} more unique cards",
-                snapshot.deck.len() - MAX_DECK_LINES
+                "Deck · {remaining}/{} remaining",
+                snapshot.game.initial_deck_size
             ));
+        } else {
+            lines.push("Current deck".to_owned());
         }
     }
 
     NativeOverlayModel {
         title: format!("ArenaNext · {mode}"),
         lines,
+        deck_rows,
     }
 }
 
@@ -206,18 +232,33 @@ fn redraft_status_line(progress: &hs_state::RedraftProgress) -> Option<String> {
     }
 }
 
-fn deck_line(card: &ResolvedDeckCard) -> String {
+fn deck_row(card: &ResolvedDeckCard) -> NativeDeckRow {
     match &card.resolution {
-        CardResolution::Resolved { card: metadata } => {
-            format!("{} ×{}", metadata.name, card.count)
-        }
-        CardResolution::Unrevealed => format!("Unrevealed card ×{}", card.count),
-        CardResolution::NonCardEntity { .. } => format!("Non-card entity ×{}", card.count),
-        CardResolution::MissingMetadata { card_id } => {
-            format!("{card_id} · metadata unavailable ×{}", card.count)
-        }
-        CardResolution::InvalidCardId { card_id } => {
-            format!("{card_id} · invalid card ID ×{}", card.count)
+        CardResolution::Resolved { card: metadata } => NativeDeckRow {
+            card_id: card.card_id.clone(),
+            name: metadata.name.clone(),
+            mana_cost: metadata.cost,
+            count: card.count,
+        },
+        CardResolution::Unrevealed => NativeDeckRow {
+            card_id: card.card_id.clone(),
+            name: "Unrevealed card".to_owned(),
+            mana_cost: None,
+            count: card.count,
+        },
+        CardResolution::NonCardEntity { .. } => NativeDeckRow {
+            card_id: card.card_id.clone(),
+            name: "Non-card entity".to_owned(),
+            mana_cost: None,
+            count: card.count,
+        },
+        CardResolution::MissingMetadata { card_id } | CardResolution::InvalidCardId { card_id } => {
+            NativeDeckRow {
+                card_id: card_id.clone(),
+                name: card_id.clone(),
+                mana_cost: None,
+                count: card.count,
+            }
         }
     }
 }
@@ -280,7 +321,11 @@ mod tests {
         let model = from_snapshot(&observer.resolved_snapshot(&cards));
 
         assert_eq!(model.title, "ArenaNext · Arena");
-        assert!(model.lines.iter().any(|line| line == "Fireball ×1"));
+        assert!(
+            model.deck_rows.iter().any(|row| {
+                row.name == "Fireball" && row.mana_cost == Some(4) && row.count == 1
+            })
+        );
     }
 
     #[test]

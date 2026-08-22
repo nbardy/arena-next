@@ -20,6 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "Native macOS overlay foundation".to_owned(),
                 "Click-through • all Spaces • fullscreen auxiliary".to_owned(),
             ],
+            deck_rows: Vec::new(),
         },
     )?;
     let mut ticks = 0_u64;
@@ -41,6 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 },
                 format!("Native observer tick {ticks}"),
             ],
+            deck_rows: Vec::new(),
         })?;
         Ok::<TickControl, OverlayError>(TickControl::Continue)
     })?;

@@ -38,7 +38,7 @@ use hs_state::{
 use serde::{Deserialize, Serialize};
 
 /// Public snapshot schema. Increment it if a field changes incompatibly.
-pub const OBSERVER_SNAPSHOT_SCHEMA_VERSION: u32 = 4;
+pub const OBSERVER_SNAPSHOT_SCHEMA_VERSION: u32 = 5;
 
 /// Persisted observer format. Any incompatible parser/reducer/cursor change
 /// must increment this, causing a deliberately safe current-deck resync
@@ -84,6 +84,8 @@ pub struct ObserverSnapshot {
     pub mode: hs_state::GameMode,
     pub hero_class: Option<hs_state::HeroClass>,
     pub deck: Vec<ResolvedDeckCard>,
+    /// Per-game remaining local deck with presentation metadata joined.
+    pub remaining_deck: Vec<ResolvedDeckCard>,
     pub deck_state: hs_state::DeckState,
     pub run: hs_state::ArenaRunState,
     pub draft: hs_state::DraftState,
@@ -1787,20 +1789,23 @@ fn is_replay_required(error: &anyhow::Error) -> bool {
 }
 
 pub fn resolve_snapshot(snapshot: ArenaSnapshot, cards: &CardCache) -> ObserverSnapshot {
-    ObserverSnapshot {
-        schema_version: OBSERVER_SNAPSHOT_SCHEMA_VERSION,
-        state_schema_version: snapshot.schema_version,
-        mode: snapshot.mode,
-        hero_class: snapshot.hero_class,
-        deck: snapshot
-            .deck
-            .into_iter()
+    let resolve_deck = |deck: Vec<DeckCard>| {
+        deck.into_iter()
             .map(|DeckCard { card_id, count }| ResolvedDeckCard {
                 resolution: cards.resolve(&card_id),
                 card_id,
                 count,
             })
-            .collect(),
+            .collect::<Vec<_>>()
+    };
+    let remaining_deck = resolve_deck(snapshot.game.remaining_deck.clone());
+    ObserverSnapshot {
+        schema_version: OBSERVER_SNAPSHOT_SCHEMA_VERSION,
+        state_schema_version: snapshot.schema_version,
+        mode: snapshot.mode,
+        hero_class: snapshot.hero_class,
+        deck: resolve_deck(snapshot.deck),
+        remaining_deck,
         deck_state: snapshot.deck_state,
         run: snapshot.run,
         draft: snapshot.draft,
@@ -2065,7 +2070,9 @@ pub fn rotate_overlarge_component_logs(session: &Path) -> RotationOutcome {
                 })
             }
             Ok(None) => {}
-            Err(error) => outcome.failures.push(format!("{}: {error:#}", path.display())),
+            Err(error) => outcome
+                .failures
+                .push(format!("{}: {error:#}", path.display())),
         }
     }
     outcome
@@ -2295,7 +2302,10 @@ mod tests {
 
         let session = temp_session();
         let bytes = sample_component_lines(500_000);
-        for filename in [LogComponent::Zone.filename(), LogComponent::Power.filename()] {
+        for filename in [
+            LogComponent::Zone.filename(),
+            LogComponent::Power.filename(),
+        ] {
             fs::write(session.join(filename), &bytes).unwrap();
         }
         let power = session.join(LogComponent::Power.filename());
@@ -2980,7 +2990,10 @@ mod tests {
         let outcome = rotate_overlarge_component_logs(&session);
         assert!(outcome.failures.is_empty());
         assert_eq!(outcome.rotations.len(), 1);
-        assert_eq!(outcome.rotations[0].component, LogComponent::Zone.filename());
+        assert_eq!(
+            outcome.rotations[0].component,
+            LogComponent::Zone.filename()
+        );
         assert_eq!(outcome.rotations[0].previous_bytes, zone_bytes.len() as u64);
 
         let result = observer.poll().unwrap();
@@ -3057,12 +3070,13 @@ mod tests {
             log_root: Some(root.clone()),
             latest_session: Some(old.clone()),
         };
-        let mut observer = LiveObserver::attach_full_replay_and_follow_discovered_with_expected_deck_slots(
-            &paths,
-            fixture_cards(),
-            None,
-        )
-        .unwrap();
+        let mut observer =
+            LiveObserver::attach_full_replay_and_follow_discovered_with_expected_deck_slots(
+                &paths,
+                fixture_cards(),
+                None,
+            )
+            .unwrap();
         assert_eq!(observer.session(), old);
 
         // Hearthstone starts a fresh session while the observer is attached.

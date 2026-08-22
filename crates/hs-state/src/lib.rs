@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 // Version 7 adds the persisted `DraftOfferSource::Manual` variant. A newer
 // checkpoint containing a manual correction must not be restored by an older
 // binary that cannot deserialize that source; live attach safely resyncs it.
-pub const SNAPSHOT_SCHEMA_VERSION: u32 = 9;
+pub const SNAPSHOT_SCHEMA_VERSION: u32 = 10;
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -485,6 +485,13 @@ pub enum DraftOfferSource {
 pub struct GameState {
     pub active: bool,
     pub result: Option<GameResult>,
+    /// Known cards still in the local player's deck for the active game.
+    /// This is a per-game projection; `ArenaSnapshot::deck` remains the
+    /// authoritative constructed Arena deck and is never consumed by draws.
+    #[serde(default)]
+    pub remaining_deck: Vec<DeckCard>,
+    #[serde(default)]
+    pub initial_deck_size: u16,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -547,6 +554,14 @@ pub enum GameEvent {
         entity_id: u32,
         card_id: String,
         zone: Option<String>,
+    },
+    /// One known local-player entity crossed the friendly deck boundary.
+    /// Entity identity makes repeated Zone.log render/update lines idempotent.
+    FriendlyCardZoneChanged {
+        entity_id: u32,
+        card_id: String,
+        from: String,
+        to: String,
     },
     ArenaOffer {
         pick_number: Option<u8>,
@@ -712,11 +727,20 @@ pub struct ArenaReducer {
     snapshot_prior_counts: Option<BTreeMap<String, u8>>,
     snapshot_card_occurrences: BTreeMap<String, u8>,
     deck_entities: BTreeMap<u32, String>,
+    game_deck_counts: BTreeMap<String, u8>,
+    game_deck_entities: BTreeMap<u32, GameDeckEntity>,
     seen_event_sources: BTreeSet<EventSource>,
     card_observations: BTreeMap<String, Vec<EventSource>>,
     configured_expected_deck_slots: Option<u16>,
     inferred_expected_deck_slots: Option<u16>,
     configured_redraft_policy: Option<RedraftPolicy>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GameDeckEntity {
+    card_id: String,
+    in_deck: bool,
 }
 
 /// Persistable reducer internals required to continue reducing a log suffix
@@ -738,6 +762,10 @@ pub struct ArenaReducerCheckpoint {
     #[serde(default)]
     snapshot_card_occurrences: BTreeMap<String, u8>,
     deck_entities: BTreeMap<u32, String>,
+    #[serde(default)]
+    game_deck_counts: BTreeMap<String, u8>,
+    #[serde(default)]
+    game_deck_entities: BTreeMap<u32, GameDeckEntity>,
     card_observations: BTreeMap<String, Vec<EventSource>>,
     configured_expected_deck_slots: Option<u16>,
     inferred_expected_deck_slots: Option<u16>,
@@ -920,12 +948,20 @@ impl ArenaReducer {
             .map(|card| (card.card_id.clone(), card.count))
             .collect();
         let inferred_expected_deck_slots = snapshot.deck_state.expected_slots;
+        let game_deck_counts = snapshot
+            .game
+            .remaining_deck
+            .iter()
+            .map(|card| (card.card_id.clone(), card.count))
+            .collect();
         Self {
             snapshot,
             deck_counts,
             snapshot_prior_counts: None,
             snapshot_card_occurrences: BTreeMap::new(),
             deck_entities: BTreeMap::new(),
+            game_deck_counts,
+            game_deck_entities: BTreeMap::new(),
             seen_event_sources: BTreeSet::new(),
             card_observations: BTreeMap::new(),
             configured_expected_deck_slots: None,
@@ -945,6 +981,8 @@ impl ArenaReducer {
             snapshot_prior_counts: self.snapshot_prior_counts.clone(),
             snapshot_card_occurrences: self.snapshot_card_occurrences.clone(),
             deck_entities: self.deck_entities.clone(),
+            game_deck_counts: self.game_deck_counts.clone(),
+            game_deck_entities: self.game_deck_entities.clone(),
             card_observations: self.card_observations.clone(),
             configured_expected_deck_slots: self.configured_expected_deck_slots,
             inferred_expected_deck_slots: self.inferred_expected_deck_slots,
@@ -1003,6 +1041,8 @@ impl ArenaReducer {
             snapshot_prior_counts: checkpoint.snapshot_prior_counts,
             snapshot_card_occurrences: checkpoint.snapshot_card_occurrences,
             deck_entities: checkpoint.deck_entities,
+            game_deck_counts: checkpoint.game_deck_counts,
+            game_deck_entities: checkpoint.game_deck_entities,
             seen_event_sources: BTreeSet::new(),
             card_observations: checkpoint.card_observations,
             configured_expected_deck_slots: checkpoint.configured_expected_deck_slots,
@@ -1010,6 +1050,7 @@ impl ArenaReducer {
             configured_redraft_policy: checkpoint.configured_redraft_policy,
         };
         reducer.sync_deck();
+        reducer.sync_game_deck();
         if reducer.snapshot != expected_snapshot {
             return Err("checkpoint snapshot does not match reducer internals".to_owned());
         }
@@ -1095,6 +1136,8 @@ impl ArenaReducer {
                 self.snapshot_prior_counts = None;
                 self.snapshot_card_occurrences.clear();
                 self.deck_entities.clear();
+                self.game_deck_counts.clear();
+                self.game_deck_entities.clear();
                 self.card_observations.clear();
                 self.inferred_expected_deck_slots = None;
                 self.snapshot.mode = GameMode::Arena;
@@ -1119,6 +1162,8 @@ impl ArenaReducer {
                 self.snapshot_prior_counts = None;
                 self.snapshot_card_occurrences.clear();
                 self.deck_entities.clear();
+                self.game_deck_counts.clear();
+                self.game_deck_entities.clear();
                 self.card_observations.clear();
                 self.inferred_expected_deck_slots = None;
 
@@ -1291,6 +1336,35 @@ impl ArenaReducer {
                 {
                     self.deck_entities.insert(entity_id, card_id.clone());
                     self.add_card(card_id);
+                }
+            }
+            GameEvent::FriendlyCardZoneChanged {
+                entity_id,
+                card_id,
+                from,
+                to,
+            } => {
+                if self.snapshot.game.active && is_real_card_id(&card_id) {
+                    let from_deck = from.eq_ignore_ascii_case("DECK");
+                    let to_deck = to.eq_ignore_ascii_case("DECK");
+                    let prior = self.game_deck_entities.get(&entity_id).cloned();
+                    if from_deck && !to_deck && prior.as_ref().is_none_or(|entity| entity.in_deck) {
+                        self.remove_game_deck_card(&card_id);
+                    } else if !from_deck
+                        && to_deck
+                        && prior.as_ref().is_none_or(|entity| !entity.in_deck)
+                    {
+                        *self.game_deck_counts.entry(card_id.clone()).or_default() += 1;
+                    }
+                    if from_deck != to_deck {
+                        self.game_deck_entities.insert(
+                            entity_id,
+                            GameDeckEntity {
+                                card_id,
+                                in_deck: to_deck,
+                            },
+                        );
+                    }
                 }
             }
             GameEvent::ArenaOffer {
@@ -1468,8 +1542,13 @@ impl ArenaReducer {
                 }
             }
             GameEvent::GameStarted => {
-                self.snapshot.game.active = true;
-                self.snapshot.game.result = None;
+                if !self.snapshot.game.active {
+                    self.snapshot.game.active = true;
+                    self.snapshot.game.result = None;
+                    self.game_deck_counts = self.deck_counts.clone();
+                    self.game_deck_entities.clear();
+                    self.snapshot.game.initial_deck_size = self.game_deck_slot_count();
+                }
             }
             GameEvent::GameEnded { result } => {
                 self.snapshot.game.active = false;
@@ -1477,12 +1556,41 @@ impl ArenaReducer {
             }
         }
         self.sync_deck();
+        self.sync_game_deck();
     }
 
     fn add_card(&mut self, card_id: String) {
         if is_real_card_id(&card_id) {
             *self.deck_counts.entry(card_id).or_default() += 1;
         }
+    }
+
+    fn remove_game_deck_card(&mut self, card_id: &str) {
+        let Some(count) = self.game_deck_counts.get_mut(card_id) else {
+            return;
+        };
+        *count = count.saturating_sub(1);
+        if *count == 0 {
+            self.game_deck_counts.remove(card_id);
+        }
+    }
+
+    fn sync_game_deck(&mut self) {
+        self.snapshot.game.remaining_deck = self
+            .game_deck_counts
+            .iter()
+            .filter(|(_, count)| **count > 0)
+            .map(|(card_id, count)| DeckCard {
+                card_id: card_id.clone(),
+                count: *count,
+            })
+            .collect();
+    }
+
+    fn game_deck_slot_count(&self) -> u16 {
+        self.game_deck_counts.values().fold(0_u16, |total, count| {
+            total.saturating_add(u16::from(*count))
+        })
     }
 
     fn begin_redraft(&mut self) {
@@ -1657,6 +1765,7 @@ impl ArenaReducer {
             | GameEvent::ArenaPick { card_id }
             | GameEvent::ArenaRedraftDiscardSelected { card_id }
             | GameEvent::CardRevealed { card_id, .. } => record(card_id),
+            GameEvent::FriendlyCardZoneChanged { card_id, .. } => record(card_id),
             GameEvent::ArenaOffer { items, .. } => {
                 for item in items {
                     if let Some(card_id) = item.card_id() {
@@ -1723,6 +1832,82 @@ mod tests {
                 card_id: "CS2_029".into(),
                 count: 1,
             }]
+        );
+    }
+
+    #[test]
+    fn active_game_tracks_draws_mulligans_and_duplicate_zone_lines() {
+        let mut reducer = ArenaReducer::new();
+        reducer.apply(GameEvent::DeckList {
+            card_ids: vec!["CARD_A".into(), "CARD_A".into(), "CARD_B".into()],
+        });
+        reducer.apply(GameEvent::GameStarted);
+        assert_eq!(reducer.snapshot().game.initial_deck_size, 3);
+
+        let draw = GameEvent::FriendlyCardZoneChanged {
+            entity_id: 41,
+            card_id: "CARD_A".into(),
+            from: "DECK".into(),
+            to: "HAND".into(),
+        };
+        reducer.apply(draw.clone());
+        reducer.apply(draw);
+        assert_eq!(
+            reducer.snapshot().game.remaining_deck,
+            vec![
+                DeckCard {
+                    card_id: "CARD_A".into(),
+                    count: 1,
+                },
+                DeckCard {
+                    card_id: "CARD_B".into(),
+                    count: 1,
+                },
+            ]
+        );
+
+        reducer.apply(GameEvent::FriendlyCardZoneChanged {
+            entity_id: 41,
+            card_id: "CARD_A".into(),
+            from: "HAND".into(),
+            to: "DECK".into(),
+        });
+        assert_eq!(
+            reducer
+                .snapshot()
+                .game
+                .remaining_deck
+                .iter()
+                .find(|card| card.card_id == "CARD_A")
+                .map(|card| card.count),
+            Some(2)
+        );
+
+        // A generated card shuffled into the deck is part of what remains.
+        reducer.apply(GameEvent::FriendlyCardZoneChanged {
+            entity_id: 99,
+            card_id: "CARD_C".into(),
+            from: "HAND".into(),
+            to: "DECK".into(),
+        });
+        assert!(
+            reducer
+                .snapshot()
+                .game
+                .remaining_deck
+                .iter()
+                .any(|card| card.card_id == "CARD_C")
+        );
+
+        // The constructed Arena deck remains unchanged by gameplay.
+        assert_eq!(
+            reducer
+                .snapshot()
+                .deck
+                .iter()
+                .map(|card| card.count)
+                .sum::<u8>(),
+            3
         );
     }
 

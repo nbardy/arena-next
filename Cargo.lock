@@ -34,7 +34,7 @@ checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
 name = "arena-analysis"
-version = "0.1.0"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "hs-card-data",
@@ -45,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "arena-draft"
-version = "0.1.0"
+version = "0.1.5"
 dependencies = [
  "hs-card-data",
  "hs-state",
@@ -55,7 +55,7 @@ dependencies = [
 
 [[package]]
 name = "arena-next"
-version = "0.1.0"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "arena-analysis",
@@ -92,7 +92,7 @@ dependencies = [
 
 [[package]]
 name = "arena-next-macos-overlay"
-version = "0.1.0"
+version = "0.1.5"
 dependencies = [
  "arena-popup",
  "objc2",
@@ -102,7 +102,7 @@ dependencies = [
 
 [[package]]
 name = "arena-next-windows-shell"
-version = "0.1.0"
+version = "0.1.5"
 dependencies = [
  "arena-popup",
  "thiserror",
@@ -111,14 +111,14 @@ dependencies = [
 
 [[package]]
 name = "arena-popup"
-version = "0.1.0"
+version = "0.1.5"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "arena-rules"
-version = "0.1.0"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "serde",
@@ -127,7 +127,7 @@ dependencies = [
 
 [[package]]
 name = "arena-scoring"
-version = "0.1.0"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "arena-analysis",
@@ -287,7 +287,7 @@ dependencies = [
 
 [[package]]
 name = "hs-card-data"
-version = "0.1.0"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -297,7 +297,7 @@ dependencies = [
 
 [[package]]
 name = "hs-log-config"
-version = "0.1.0"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "serde",
@@ -305,7 +305,7 @@ dependencies = [
 
 [[package]]
 name = "hs-log-parser"
-version = "0.1.0"
+version = "0.1.5"
 dependencies = [
  "hs-state",
  "regex",
@@ -314,7 +314,7 @@ dependencies = [
 
 [[package]]
 name = "hs-observer"
-version = "0.1.0"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -328,7 +328,7 @@ dependencies = [
 
 [[package]]
 name = "hs-paths"
-version = "0.1.0"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "serde",
@@ -336,7 +336,7 @@ dependencies = [
 
 [[package]]
 name = "hs-state"
-version = "0.1.0"
+version = "0.1.5"
 dependencies = [
  "serde",
  "serde_json",

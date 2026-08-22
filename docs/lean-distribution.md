@@ -20,14 +20,16 @@ Included:
 Not included:
 
 - Electron, Chromium, Node.js, a web renderer, Python, Qt, Java, or OpenCV;
-- Hearthstone card art or the full metadata database;
+- a bundled Hearthstone card-art corpus or the full metadata database;
 - Hearthstone binaries, logs, or credentials.
 
 Card metadata is stored outside the bundle at
 `~/Library/Application Support/ArenaNext/card-data.json`. The native app reads
 a validated local JSON cache; the first release deliberately has no HTTP
 updater. This keeps the installer small and leaves room for a later explicit
-data-import workflow without shipping a network stack in the overlay process.
+data-import workflow. Full rendered cards are fetched only when the player
+hovers a deck row and then cached under ArenaNext application data; the app
+does not prefetch or bundle the complete art corpus.
 
 ## Installation path
 
