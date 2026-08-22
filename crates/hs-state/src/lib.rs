@@ -1131,21 +1131,7 @@ impl ArenaReducer {
                 // another view of the prior deck. Reset every Arena-owned
                 // field so a tail replay beginning at this source has the
                 // same state as a complete replay with older runs before it.
-                self.snapshot = ArenaSnapshot::empty();
-                self.deck_counts.clear();
-                self.snapshot_prior_counts = None;
-                self.snapshot_card_occurrences.clear();
-                self.deck_entities.clear();
-                self.game_deck_counts.clear();
-                self.game_deck_entities.clear();
-                self.card_observations.clear();
-                self.inferred_expected_deck_slots = None;
-                self.snapshot.mode = GameMode::Arena;
-                self.snapshot.run.draft_deck_id = Some(draft_deck_id);
-                self.snapshot.run.deck_snapshot_complete = false;
-                self.snapshot.run.state_origin = ArenaStateOrigin::Replay;
-                self.snapshot.draft.history_status = DraftHistoryStatus::Complete;
-                self.snapshot.draft.phase_progress_status = DraftPhaseProgressStatus::Complete;
+                self.begin_new_arena_run(draft_deck_id);
             }
             GameEvent::ArenaAuthoritativeResync {
                 draft_deck_id,
@@ -1202,6 +1188,19 @@ impl ArenaReducer {
                 draft_deck_id,
                 hero_card_id,
             } => {
+                // Current clients do not reliably emit `OnBegin` when a new
+                // run starts. A changed authoritative deck ID is itself a
+                // sufficient run boundary and must not inherit the previous
+                // run's picks, game projection, or offer state.
+                if self
+                    .snapshot
+                    .run
+                    .draft_deck_id
+                    .as_deref()
+                    .is_some_and(|current| current != draft_deck_id)
+                {
+                    self.begin_new_arena_run(draft_deck_id.clone());
+                }
                 let preserve_expected_slots = self.snapshot.run.draft_deck_id.as_deref()
                     == Some(draft_deck_id.as_str())
                     && matches!(
@@ -1563,6 +1562,24 @@ impl ArenaReducer {
         if is_real_card_id(&card_id) {
             *self.deck_counts.entry(card_id).or_default() += 1;
         }
+    }
+
+    fn begin_new_arena_run(&mut self, draft_deck_id: String) {
+        self.snapshot = ArenaSnapshot::empty();
+        self.deck_counts.clear();
+        self.snapshot_prior_counts = None;
+        self.snapshot_card_occurrences.clear();
+        self.deck_entities.clear();
+        self.game_deck_counts.clear();
+        self.game_deck_entities.clear();
+        self.card_observations.clear();
+        self.inferred_expected_deck_slots = None;
+        self.snapshot.mode = GameMode::Arena;
+        self.snapshot.run.draft_deck_id = Some(draft_deck_id);
+        self.snapshot.run.deck_snapshot_complete = false;
+        self.snapshot.run.state_origin = ArenaStateOrigin::Replay;
+        self.snapshot.draft.history_status = DraftHistoryStatus::Complete;
+        self.snapshot.draft.phase_progress_status = DraftPhaseProgressStatus::Complete;
     }
 
     fn remove_game_deck_card(&mut self, card_id: &str) {
@@ -2452,6 +2469,45 @@ mod tests {
             ]
         );
         assert_eq!(reducer.snapshot().deck_state.observed_slots, 3);
+    }
+
+    #[test]
+    fn changed_snapshot_deck_id_resets_run_without_on_begin() {
+        let mut reducer = ArenaReducer::new();
+        reducer.apply(GameEvent::ArenaRunStarted {
+            draft_deck_id: "old-run".into(),
+        });
+        reducer.apply(GameEvent::ArenaDraftMode {
+            mode: "DRAFTING".into(),
+        });
+        reducer.apply(GameEvent::ArenaPick {
+            card_id: "OLD_CARD".into(),
+        });
+        reducer.apply(GameEvent::GameStarted);
+
+        // This is the sequence emitted by current Hearthstone clients: no
+        // DraftManager.OnBegin, only an inactive marker followed by a new ID.
+        reducer.apply(GameEvent::ArenaDraftMode {
+            mode: "NO_ACTIVE_DRAFT".into(),
+        });
+        reducer.apply(GameEvent::ArenaDeckSnapshotStarted {
+            draft_deck_id: "new-run".into(),
+            hero_card_id: None,
+        });
+        reducer.apply(GameEvent::ArenaDeckSnapshotCompleted);
+        reducer.apply(GameEvent::ArenaDraftMode {
+            mode: "DRAFTING".into(),
+        });
+
+        let snapshot = reducer.snapshot();
+        assert_eq!(snapshot.run.draft_deck_id.as_deref(), Some("new-run"));
+        assert_eq!(snapshot.run.draft_phase, ArenaDraftPhase::Drafting);
+        assert!(snapshot.deck.is_empty());
+        assert!(snapshot.draft.selections.is_empty());
+        assert!(snapshot.draft.current_offer.is_none());
+        assert!(!snapshot.game.active);
+        assert!(snapshot.game.remaining_deck.is_empty());
+        assert_eq!(snapshot.draft.pick_number, 1);
     }
 
     #[test]

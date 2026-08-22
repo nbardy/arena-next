@@ -9,6 +9,13 @@ ArenaNext keeps two distinct deck representations:
 The original Arena deck is never decremented. This matters for restart,
 post-game review, Redraft, and future games in the same run.
 
+A different authoritative `Draft Deck ID` resets all Arena-owned state even
+when Hearthstone omits `DraftManager.OnBegin`. Current clients may announce a
+fresh run only as `NO_ACTIVE_DRAFT`, a new deck snapshot, and `DRAFTING`; the
+changed ID is therefore the durable run boundary. The new run starts with its
+logged package cards (or an empty deck) and cannot inherit the prior run's
+picks, game deck, or visible offer.
+
 ## Log boundary
 
 The parser accepts only final `ZoneChangeList.ProcessChanges()` records whose
@@ -44,4 +51,3 @@ HearthstoneJSON image API on a background thread and caches it at:
 
 Later hovers are local. A failed fetch leaves the row and tracker usable and
 records the failure in `~/Library/Logs/ArenaNext/app.log`.
-
