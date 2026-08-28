@@ -9,7 +9,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use hs_card_data::{CardCache, CardMetadata};
 use serde::{Deserialize, Serialize};
 
-pub const ARENA_DECK_CAPACITY: u8 = 30;
+pub const ARENA_DECK_CAPACITY: u8 = hs_state::ARENA_DECK_SLOTS as u8;
+/// Temporary capacity exposed by Hearthstone while an Arena Redraft is being
+/// assembled. It is not a completed deck-size rule.
+pub const ARENA_EDITOR_DECK_CAPACITY: u8 = hs_state::ARENA_EDITOR_DECK_SLOTS as u8;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SidebarTextObservation {
@@ -163,7 +166,11 @@ pub fn interpret_deck_sidebar(
     let status = if !anchored {
         SidebarDeckStatus::Unanchored
     } else if let Some(count) = count {
-        if count.capacity != ARENA_DECK_CAPACITY || count.observed > count.capacity {
+        if !matches!(
+            count.capacity,
+            ARENA_DECK_CAPACITY | ARENA_EDITOR_DECK_CAPACITY
+        ) || count.observed > count.capacity
+        {
             SidebarDeckStatus::Inconsistent
         } else if visible_quantity == u16::from(count.observed) {
             SidebarDeckStatus::Complete
@@ -400,6 +407,25 @@ mod tests {
         assert_eq!(read.status, SidebarDeckStatus::Complete);
         assert_eq!(read.visible_quantity, 5);
         assert_eq!(read.authoritative_counts().unwrap()["TIME_002"], 1);
+    }
+
+    #[test]
+    fn redraft_editor_capacity_is_authoritative_when_all_cards_are_visible() {
+        let read = interpret_deck_sidebar(
+            &observations(&[
+                "Your Deck",
+                "Portal Vanguard x7",
+                "Whelp of the Infinite x7",
+                "Morchie x7",
+                "Aeon Wizard x7",
+                "Conflux Crasher x7",
+                "35/35",
+            ]),
+            &cache(),
+        );
+        assert_eq!(read.status, SidebarDeckStatus::Complete);
+        assert_eq!(read.visible_quantity, 35);
+        assert_eq!(read.authoritative_counts().unwrap()["TIME_002"], 7);
     }
 
     #[test]

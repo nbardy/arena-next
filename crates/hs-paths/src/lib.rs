@@ -95,6 +95,25 @@ pub fn latest_log_session(log_root: &Path) -> Option<PathBuf> {
         }
     }
 
+    // A fresh client can create Arena.log before all other component logs.
+    // Prefer that active Arena session over an older complete session.
+    let recent_arena = candidates
+        .iter()
+        .filter(|candidate| candidate.join("Arena.log").is_file())
+        .filter_map(|candidate| {
+            let modified = fs::metadata(candidate.join("Arena.log"))
+                .ok()?
+                .modified()
+                .ok()?;
+            let age = SystemTime::now().duration_since(modified).ok()?;
+            (age <= std::time::Duration::from_secs(120)).then_some((modified, candidate.clone()))
+        })
+        .max_by_key(|(modified, _)| *modified)
+        .map(|(_, candidate)| candidate);
+    if let Some(recent_arena) = recent_arena {
+        return Some(recent_arena);
+    }
+
     candidates
         .into_iter()
         .filter(|candidate| has_log_components(candidate))

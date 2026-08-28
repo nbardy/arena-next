@@ -972,10 +972,17 @@ impl SessionObserver {
         if self.reducer.snapshot().run.draft_deck_id.is_none() {
             anyhow::bail!("cannot apply a deck capacity before an Arena run is identified");
         }
+        let editor_overflow = self.reducer.snapshot().run.draft_phase
+            == hs_state::ArenaDraftPhase::ActiveDeck
+            && expected_slots == hs_state::ARENA_EDITOR_DECK_SLOTS
+            && observed_slots <= expected_slots;
         if expected_slots == 0 || observed_slots > expected_slots {
             anyhow::bail!(
                 "sidebar count {observed_slots}/{expected_slots} is not a valid deck capacity"
             );
+        }
+        if expected_slots > hs_state::ARENA_DECK_SLOTS && !editor_overflow {
+            anyhow::bail!("sidebar capacity {expected_slots} is only valid in the deck editor");
         }
         let before = self.reducer.snapshot().deck_state.expected_slots;
         self.reducer.set_expected_deck_slots(Some(expected_slots));
@@ -1004,10 +1011,21 @@ impl SessionObserver {
                 card_ids.len()
             );
         }
+        // The Arena deck editor temporarily exposes a 35-card state while a
+        // five-card Redraft is being assembled. The rules contract remains
+        // 30 cards; this exception is only for a complete sidebar read while
+        // the run is in its active-deck/editor transition.
+        let editor_overflow = self.reducer.snapshot().run.draft_phase
+            == hs_state::ArenaDraftPhase::ActiveDeck
+            && expected_slots == hs_state::ARENA_EDITOR_DECK_SLOTS
+            && observed_slots <= expected_slots;
         if expected_slots == 0 || observed_slots > expected_slots {
             anyhow::bail!(
                 "sidebar count {observed_slots}/{expected_slots} is not a valid deck capacity"
             );
+        }
+        if expected_slots > hs_state::ARENA_DECK_SLOTS && !editor_overflow {
+            anyhow::bail!("sidebar capacity {expected_slots} is only valid in the deck editor");
         }
         if card_ids.is_empty() || card_ids.iter().any(|card_id| !is_real_card_id(card_id)) {
             anyhow::bail!("sidebar baseline contains no cards or a non-card entity");
@@ -2512,6 +2530,55 @@ mod tests {
         assert!(!observer.arena_picks_enabled());
         assert!(observer.apply_sidebar_capacity(31, 30).is_err());
 
+        fs::remove_dir_all(session).unwrap();
+    }
+
+    #[test]
+    fn redraft_sidebar_accepts_35_then_restores_normal_30_card_capacity() {
+        let session = temp_session();
+        fs::write(
+            session.join("Arena.log"),
+            concat!(
+                "D 12:00:00.0000000 OnBegin - Got new draft deck with ID: 42\n",
+                "D 12:00:01.0000000 SetDraftMode - ACTIVE_DRAFT_DECK\n",
+            ),
+        )
+        .unwrap();
+        let mut observer =
+            SessionObserver::attach_with_expected_deck_slots(&session, Some(30)).unwrap();
+
+        assert!(
+            observer
+                .apply_complete_sidebar_baseline(
+                    vec!["CS2_029".to_string(); 35],
+                    hs_state::ARENA_EDITOR_DECK_SLOTS,
+                    hs_state::ARENA_EDITOR_DECK_SLOTS,
+                )
+                .unwrap()
+        );
+        assert_eq!(
+            observer.state().deck_state.expected_slots,
+            Some(hs_state::ARENA_EDITOR_DECK_SLOTS)
+        );
+        assert_eq!(
+            observer.state().deck_state.observed_slots,
+            hs_state::ARENA_EDITOR_DECK_SLOTS
+        );
+
+        assert!(
+            observer
+                .apply_complete_sidebar_baseline(
+                    vec!["CS2_029".to_string(); 30],
+                    hs_state::ARENA_DECK_SLOTS,
+                    hs_state::ARENA_DECK_SLOTS,
+                )
+                .unwrap()
+        );
+        assert_eq!(
+            observer.state().deck_state.expected_slots,
+            Some(hs_state::ARENA_DECK_SLOTS)
+        );
+        assert_eq!(observer.state().deck_state.observed_slots, 30);
         fs::remove_dir_all(session).unwrap();
     }
 

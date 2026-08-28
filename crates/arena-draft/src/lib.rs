@@ -20,9 +20,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 mod sidebar;
 
 pub use sidebar::{
-    ARENA_DECK_CAPACITY, DeckCount, ReconciliationKind, SidebarCard, SidebarDeckRead,
-    SidebarDeckStatus, SidebarIssue, SidebarReconciliation, SidebarTextObservation,
-    interpret_deck_sidebar, reconcile_deck_sidebar,
+    ARENA_DECK_CAPACITY, ARENA_EDITOR_DECK_CAPACITY, DeckCount, ReconciliationKind, SidebarCard,
+    SidebarDeckRead, SidebarDeckStatus, SidebarIssue, SidebarReconciliation,
+    SidebarTextObservation, interpret_deck_sidebar, reconcile_deck_sidebar,
 };
 
 /// The confidence floor used by the default matcher and recommendation gate.

@@ -457,9 +457,13 @@ fn begin_direct_window_capture(
                             let image = unsafe { image.as_ref() }.ok_or(
                                 CaptureError::InvalidFrame("ScreenCaptureKit returned no image"),
                             )?;
+                            // Reject non-draft screens before paying for the
+                            // larger three-title OCR pass.
+                            let header = recognize_draft_header(image)?;
                             let offers = recognize_draft_offers(image)?;
                             Ok(CaptureResult::DraftOffers(DraftOfferTextCapture {
                                 frame,
+                                header,
                                 offers,
                             }))
                         }
@@ -596,6 +600,39 @@ fn recognize_draft_offers(image: &CGImage) -> Result<[Vec<RecognizedText>; 3], C
         offers[slot].push(item);
     }
     Ok(offers)
+}
+
+fn recognize_draft_header(image: &CGImage) -> Result<Vec<RecognizedText>, CaptureError> {
+    // The current client omits the Arena Redraft boundary from Arena.log.
+    // The centered top ribbon is therefore the authoritative visual signal
+    // that this is the Draft New Cards editor rather than gameplay.
+    let request = VNRecognizeTextRequest::new();
+    request.setRecognitionLevel(VNRequestTextRecognitionLevel::Accurate);
+    request.setUsesLanguageCorrection(true);
+    request.setMinimumTextHeight(0.012);
+    unsafe {
+        request.setRegionOfInterest(CGRect::new(
+            // Include both the border ribbon and the macOS window-content
+            // offset seen on current clients. The caller still requires the
+            // distinctive header text, so the wider ROI cannot activate
+            // draft OCR during ordinary gameplay.
+            CGPoint::new(0.10, 0.76),
+            CGSize::new(0.80, 0.23),
+        ));
+    }
+    let request_array = NSArray::<VNRequest>::from_slice(&[&request]);
+    let options = NSDictionary::<objc2_vision::VNImageOption, AnyObject>::new();
+    let handler = unsafe {
+        VNImageRequestHandler::initWithCGImage_options(
+            VNImageRequestHandler::alloc(),
+            image,
+            &options,
+        )
+    };
+    handler
+        .performRequests_error(&request_array)
+        .map_err(|error| CaptureError::TextRecognition(error.localizedDescription().to_string()))?;
+    Ok(recognized_text_results(&request))
 }
 
 fn draft_offer_slot(roi_relative_center_x: f64, slot_count: f64) -> usize {

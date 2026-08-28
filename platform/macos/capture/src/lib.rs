@@ -240,6 +240,7 @@ pub struct DeckSidebarCapture {
 #[derive(Clone, Debug, PartialEq)]
 pub struct DraftOfferTextCapture {
     pub frame: CapturedFrame,
+    pub header: Vec<RecognizedText>,
     pub offers: [Vec<RecognizedText>; 3],
 }
 

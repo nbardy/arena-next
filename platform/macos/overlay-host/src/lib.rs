@@ -28,11 +28,11 @@ use objc2::{
     runtime::AnyObject,
 };
 use objc2_app_kit::{
-    NSAlert, NSAlertStyle, NSAnyEventMask, NSApplication, NSApplicationActivationPolicy,
-    NSAutoresizingMaskOptions, NSBackingStoreType, NSBox, NSButton, NSColor, NSEvent, NSEventMask,
-    NSFont, NSImage, NSImageScaling, NSImageView, NSPanel, NSPopover, NSPopoverBehavior,
-    NSProgressIndicator, NSProgressIndicatorStyle, NSScreen, NSStatusBar, NSStatusWindowLevel,
-    NSTextField, NSVariableStatusItemLength, NSView, NSViewController, NSWindowCollectionBehavior,
+    NSAlert, NSAlertStyle, NSApplication, NSApplicationActivationPolicy, NSAutoresizingMaskOptions,
+    NSBackingStoreType, NSBox, NSButton, NSColor, NSEvent, NSEventMask, NSFont, NSImage,
+    NSImageScaling, NSImageView, NSPanel, NSPopover, NSPopoverBehavior, NSProgressIndicator,
+    NSProgressIndicatorStyle, NSScreen, NSStatusBar, NSStatusWindowLevel, NSTextField,
+    NSVariableStatusItemLength, NSView, NSViewController, NSWindowCollectionBehavior,
     NSWindowStyleMask, NSWorkspace,
 };
 use objc2_foundation::{
@@ -1088,7 +1088,7 @@ fn pump_app_events(application: &NSApplication, deadline: Instant) {
         }
         let limit = NSDate::dateWithTimeIntervalSinceNow(remaining.as_secs_f64());
         let event = application.nextEventMatchingMask_untilDate_inMode_dequeue(
-            NSEventMask(NSAnyEventMask.0),
+            NSEventMask::Any,
             Some(&limit),
             unsafe { NSDefaultRunLoopMode },
             true,

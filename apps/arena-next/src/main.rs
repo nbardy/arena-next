@@ -86,6 +86,8 @@ struct SharedObserverState {
     checkpoint_error: Option<String>,
     external_draft: Option<model::ExternalDraftModel>,
     offer_overlay: Option<OfferOverlayState>,
+    review_lines: Option<Vec<String>>,
+    cut_lines: Option<Vec<String>>,
     /// Newest required component log freshness of the followed session. The
     /// worker recomputes this after every attach and poll so a frozen writer
     /// set (see `hs_observer::LogStaleness`) is visible on the next overlay
@@ -1049,6 +1051,8 @@ struct OfferOcrWorker {
     current_window: Option<arena_next_macos_capture::GameWindow>,
     confirmed: bool,
     last_capture_at: Option<Instant>,
+    last_error: Option<String>,
+    last_error_logged_at: Option<Instant>,
 }
 
 #[cfg(target_os = "macos")]
@@ -1071,6 +1075,8 @@ impl OfferOcrWorker {
             current_window: None,
             confirmed: false,
             last_capture_at: None,
+            last_error: None,
+            last_error_logged_at: None,
         })
     }
 
@@ -1082,9 +1088,17 @@ impl OfferOcrWorker {
         self.current_window = None;
         self.confirmed = false;
         self.last_capture_at = None;
+        self.last_error = None;
+        self.last_error_logged_at = None;
     }
 
     fn update(&mut self, snapshot: &ObserverSnapshot) -> Option<OfferOverlayState> {
+        // A resynced deck can retain ACTIVE_DRAFT_DECK after the user enters
+        // a match. Never carry draft badges into gameplay.
+        if snapshot.game.active {
+            self.reset();
+            return None;
+        }
         let Some(key) = unresolved_draft_key(snapshot) else {
             self.reset();
             return None;
@@ -1120,8 +1134,28 @@ impl OfferOcrWorker {
         let (ids, window) = match self.capture_once(snapshot.hero_class) {
             Ok(result) => result,
             Err(error) => {
-                eprintln!("ArenaNext offer OCR retry: {error:#}");
-                app_log(format!("offer OCR retry: {error:#}"));
+                // A confirmed offer is only valid while the draft header is
+                // visible. Clear it as soon as the header disappears rather
+                // than leaving the last three rankings floating over the
+                // next Hearthstone screen.
+                if error
+                    .to_string()
+                    .contains("Draft New Cards header was not detected")
+                {
+                    self.reset();
+                    return None;
+                }
+                let message = format!("{error:#}");
+                let should_log = self.last_error.as_deref() != Some(message.as_str())
+                    || self
+                        .last_error_logged_at
+                        .is_none_or(|last| last.elapsed() >= Duration::from_secs(10));
+                if should_log {
+                    eprintln!("ArenaNext offer OCR retry: {message}");
+                    app_log(format!("offer OCR retry: {message}"));
+                    self.last_error_logged_at = Some(Instant::now());
+                }
+                self.last_error = Some(message);
                 if !self.confirmed
                     && let Some(window) = &self.current_window
                 {
@@ -1199,6 +1233,9 @@ impl OfferOcrWorker {
                 ..CaptureOptions::default()
             },
         )?;
+        if !draft_header_detected(&capture.header) {
+            anyhow::bail!("Draft New Cards header was not detected");
+        }
         write_offer_ocr_audit(&capture)?;
         let mut ids = Vec::with_capacity(3);
         for slot in &capture.offers {
@@ -1236,12 +1273,19 @@ impl OfferOcrWorker {
         );
         let badges = std::array::from_fn(|index| {
             let card_id = &ids[index];
-            let card_name = self
-                .cards
-                .get(card_id)
-                .map(|card| card.name.as_str())
-                .unwrap_or(card_id);
-            let (detail, deck_score) = if let Some(provider) = &self.ratings
+            let unresolved_ocr_name = card_id.strip_prefix("__OCR__");
+            let card_name = unresolved_ocr_name.unwrap_or_else(|| {
+                self.cards
+                    .get(card_id)
+                    .map(|card| card.name.as_str())
+                    .unwrap_or(card_id)
+            });
+            let (detail, deck_score) = if unresolved_ocr_name.is_some() {
+                (
+                    "CARD DATA OUTDATED  ·  SCORE PAUSED".to_owned(),
+                    "—".to_owned(),
+                )
+            } else if let Some(provider) = &self.ratings
                 && deck_is_exact
             {
                 let score = arena_scoring::score_offer(
@@ -1312,6 +1356,24 @@ impl OfferOcrWorker {
         });
         Ok(OfferOverlayState { badges })
     }
+}
+
+#[cfg(target_os = "macos")]
+fn draft_header_detected(header: &[arena_next_macos_capture::RecognizedText]) -> bool {
+    let normalized = header
+        .iter()
+        .map(|item| {
+            item.text
+                .chars()
+                .filter(|character| character.is_ascii_alphanumeric())
+                .flat_map(char::to_lowercase)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let compact = normalized.replace(' ', "");
+    (compact.contains("draft") && (compact.contains("newcard") || compact.contains("newcards")))
+        || (compact.contains("draft") && compact.contains("yourdeck"))
 }
 
 #[cfg(target_os = "macos")]
@@ -1466,7 +1528,13 @@ fn resolve_offer_ocr_slot(
                     .chars()
                     .filter(|character| character.is_alphanumeric())
                     .count();
-                let maximum_distance = if normalized_len >= 10 { 2 } else { 1 };
+                let maximum_distance = if normalized_len >= 12 {
+                    4
+                } else if normalized_len >= 10 {
+                    3
+                } else {
+                    1
+                };
                 cards.find_collectible_by_ocr_name_near(text, maximum_distance)
             })
             .map(|(card, distance)| (card.id.clone(), distance))
@@ -1492,7 +1560,14 @@ fn resolve_offer_ocr_slot(
     }
     match matches.as_slice() {
         [card_id] => Ok(card_id.clone()),
-        [] => anyhow::bail!("offer title did not exactly match a collectible card"),
+        [] => {
+            let title = observations
+                .first()
+                .map(|item| item.text.trim())
+                .filter(|text| !text.is_empty())
+                .context("offer title OCR returned no text")?;
+            Ok(format!("__OCR__{title}"))
+        }
         _ => anyhow::bail!("offer title matched multiple collectible card IDs"),
     }
 }
@@ -1541,20 +1616,21 @@ impl DeckSidebarWorker {
         }
         run.as_ref()?;
 
-        // Before a baseline, keep retrying while the hero/package screens
-        // transition. Afterward, capture only on activation or a new run.
-        if picks_enabled
-            && !activated
-            && !new_run
-            && self.pending.is_none()
-            && self.pending_count.is_none()
-        {
-            return None;
-        }
+        // Keep polling after the initial baseline. The deck editor does not
+        // reliably emit Arena.log events for its five additions/removals, so
+        // the 30 -> 35 -> 30 sidebar transitions are our authoritative UI
+        // evidence. The two-read debounce below prevents a transient OCR
+        // frame from replacing the deck.
         let interval = if self.pending.is_some() || self.pending_count.is_some() {
             Duration::from_millis(400)
         } else {
-            Duration::from_secs(2)
+            // Before the baseline, transition screens need more time. Once
+            // a deck is known, check often enough to catch each editor step.
+            if picks_enabled {
+                Duration::from_secs(1)
+            } else {
+                Duration::from_secs(2)
+            }
         };
         if self
             .last_capture_at
@@ -1842,8 +1918,14 @@ fn unresolved_draft_key(snapshot: &ObserverSnapshot) -> Option<DraftKey> {
     if snapshot.mode != hs_state::GameMode::Arena || snapshot.draft.current_offer.is_some() {
         return None;
     }
+    if snapshot.game.active {
+        return None;
+    }
     let phase = snapshot.run.draft_phase.clone();
-    if !phase.accepts_card_offers() {
+    let editor_resync = phase == hs_state::ArenaDraftPhase::ActiveDeck
+        && snapshot.deck_state.observed_slots > 0
+        && snapshot.deck_state.observed_slots <= u16::from(arena_draft::ARENA_DECK_CAPACITY);
+    if !phase.accepts_card_offers() && !editor_resync {
         return None;
     }
     // A current-deck tail resync establishes that the normal Draft offer UI
@@ -1852,11 +1934,14 @@ fn unresolved_draft_key(snapshot: &ObserverSnapshot) -> Option<DraftKey> {
     // subsequent logged picks advance `phase_pick_count` and create a fresh
     // recognition epoch. Do not invent pick 1 merely to enable recognition.
     //
-    // Redraft is different: its later five-card discard review has no
-    // reliably identifiable log boundary, so unknown Redraft progress must
-    // remain withheld by its explicit policy gate below.
+    // Some current clients do not log the Redraft boundary or its progress.
+    // Keep the visual three-card capture available in that case; the
+    // separate discard-review stage remains blocked by redraft_capture_status.
     if phase == hs_state::ArenaDraftPhase::Redrafting
-        && !snapshot.draft.redraft.accepts_normal_draft_capture()
+        && !matches!(
+            snapshot.draft.redraft.stage,
+            hs_state::RedraftStage::PickingOffers
+        )
     {
         return None;
     }
@@ -1879,14 +1964,9 @@ fn redraft_capture_status(snapshot: &ObserverSnapshot) -> Option<String> {
     use hs_state::RedraftStage;
 
     let redraft = &snapshot.draft.redraft;
-    if snapshot.run.draft_phase == hs_state::ArenaDraftPhase::Redrafting
-        && !redraft.pick_progress_known
-    {
-        return Some(
-            "Redraft current deck was resynced, but pick progress is unknown; direct-window matching is withheld."
-                .to_owned(),
-        );
-    }
+    // A three-card Redraft offer is still safe to inspect when the client did
+    // not emit a progress marker. The discard-review stages below remain
+    // explicitly withheld because they are not three-card offers.
     match redraft.stage {
         RedraftStage::Inactive => None,
         RedraftStage::PickingOffers if redraft.accepts_normal_draft_capture() => None,
@@ -2010,6 +2090,7 @@ fn start_observer(options: &Options) -> Result<(Arc<RwLock<SharedObserverState>>
         env!("CARGO_PKG_VERSION")
     ));
     let cards = load_cards(options.cards.as_deref())?;
+    let review_ratings = load_live_ratings(options)?;
     let draft_worker = DraftRecognitionWorker::from_options(options, cards.clone())?;
     let offer_ocr_worker = OfferOcrWorker::from_options(options, cards.clone())?;
     let sidebar_worker = DeckSidebarWorker::new(cards.clone());
@@ -2023,6 +2104,8 @@ fn start_observer(options: &Options) -> Result<(Arc<RwLock<SharedObserverState>>
         // renders its latest text model.
         external_draft: None,
         offer_overlay: None,
+        review_lines: None,
+        cut_lines: None,
         log_staleness: LogStaleness::NoLogs,
     }));
     let worker_state = Arc::clone(&state);
@@ -2035,6 +2118,7 @@ fn start_observer(options: &Options) -> Result<(Arc<RwLock<SharedObserverState>>
             let mut draft_worker = draft_worker;
             let mut offer_ocr_worker = offer_ocr_worker;
             let mut sidebar_worker = sidebar_worker;
+            let mut cut_lines: Option<Vec<String>> = None;
             loop {
                 let (mut observer, _checkpoint_restore) = match open_observer_with_checkpoint(
                     &worker_options,
@@ -2049,6 +2133,8 @@ fn start_observer(options: &Options) -> Result<(Arc<RwLock<SharedObserverState>>
                             latest.last_error = Some(error.to_string());
                             latest.external_draft = None;
                             latest.offer_overlay = None;
+                            latest.review_lines = None;
+                            latest.cut_lines = None;
                         }
                         // Keep the small app launchable before Hearthstone
                         // starts, and retry without blocking AppKit.
@@ -2091,6 +2177,7 @@ fn start_observer(options: &Options) -> Result<(Arc<RwLock<SharedObserverState>>
                     .as_mut()
                     .and_then(|worker| worker.update(&snapshot));
                 let offer_overlay = offer_ocr_worker.update(&snapshot);
+                let review_lines = redraft_review_lines(&snapshot, &cards, review_ratings.as_ref());
                 let staleness = observer.session_staleness(LOG_STALENESS_THRESHOLD);
                 app_log(format!(
                     "attached method={:?} staleness={} session={}",
@@ -2105,6 +2192,8 @@ fn start_observer(options: &Options) -> Result<(Arc<RwLock<SharedObserverState>>
                     latest.checkpoint_error = checkpoint_error.clone();
                     latest.external_draft = external_draft;
                     latest.offer_overlay = offer_overlay;
+                    latest.review_lines = review_lines;
+                    latest.cut_lines = cut_lines.clone();
                 }
 
                 loop {
@@ -2117,6 +2206,7 @@ fn start_observer(options: &Options) -> Result<(Arc<RwLock<SharedObserverState>>
                                     .map(|error| error.to_string());
                             }
                             let mut snapshot = observer.snapshot();
+                            let sidebar_before = snapshot.clone();
                             if let Some(update) = sidebar_worker.update(
                                 &snapshot,
                                 worker_activation_generation.load(Ordering::Relaxed),
@@ -2140,12 +2230,19 @@ fn start_observer(options: &Options) -> Result<(Arc<RwLock<SharedObserverState>>
                                         .err()
                                         .map(|error| error.to_string());
                                     snapshot = observer.snapshot();
+                                    if let Some(lines) =
+                                        sidebar_cut_lines(&sidebar_before, &snapshot, &cards)
+                                    {
+                                        cut_lines = Some(lines);
+                                    }
                                 }
                             }
                             let external_draft = draft_worker
                                 .as_mut()
                                 .and_then(|worker| worker.update(&snapshot));
                             let offer_overlay = offer_ocr_worker.update(&snapshot);
+                            let review_lines =
+                                redraft_review_lines(&snapshot, &cards, review_ratings.as_ref());
                             let staleness = observer.session_staleness(LOG_STALENESS_THRESHOLD);
                             if let Ok(mut latest) = worker_state.write() {
                                 record_staleness(&mut latest, staleness);
@@ -2154,6 +2251,8 @@ fn start_observer(options: &Options) -> Result<(Arc<RwLock<SharedObserverState>>
                                 latest.checkpoint_error = checkpoint_error.clone();
                                 latest.external_draft = external_draft;
                                 latest.offer_overlay = offer_overlay;
+                                latest.review_lines = review_lines;
+                                latest.cut_lines = cut_lines.clone();
                             }
                             // Proactive rotation: keep every component log below
                             // the game's hardcoded 10000KB cap before its own
@@ -2190,6 +2289,8 @@ fn start_observer(options: &Options) -> Result<(Arc<RwLock<SharedObserverState>>
                                 latest.checkpoint_error = checkpoint_error.clone();
                                 latest.external_draft = None;
                                 latest.offer_overlay = None;
+                                latest.review_lines = None;
+                                latest.cut_lines = None;
                             }
                             break;
                         }
@@ -2809,7 +2910,137 @@ fn current_model(state: &Arc<RwLock<SharedObserverState>>) -> model::NativeOverl
             .lines
             .push(format!("Local recovery checkpoint: {error}"));
     }
+    if let Some(review_lines) = &state.review_lines {
+        model.lines.extend(review_lines.iter().cloned());
+    }
+    if let Some(cut_lines) = &state.cut_lines {
+        model.lines.extend(cut_lines.iter().cloned());
+    }
     model
+}
+
+#[cfg(target_os = "macos")]
+fn sidebar_cut_lines(
+    before: &ObserverSnapshot,
+    after: &ObserverSnapshot,
+    cards: &CardCache,
+) -> Option<Vec<String>> {
+    let editor_capacity = u16::from(arena_draft::ARENA_EDITOR_DECK_CAPACITY);
+    let normal_capacity = u16::from(arena_draft::ARENA_DECK_CAPACITY);
+    if before.deck_state.observed_slots <= after.deck_state.observed_slots
+        || before.deck_state.observed_slots != editor_capacity
+        || after.deck_state.observed_slots != normal_capacity
+    {
+        return None;
+    }
+
+    let mut before_counts = before
+        .deck
+        .iter()
+        .map(|card| (card.card_id.clone(), card.count))
+        .collect::<BTreeMap<_, _>>();
+    for card in &after.deck {
+        let retained = card.count;
+        let previous = before_counts.entry(card.card_id.clone()).or_default();
+        *previous = previous.saturating_sub(retained);
+    }
+
+    let removed = before_counts
+        .into_iter()
+        .flat_map(|(card_id, count)| std::iter::repeat_n((card_id, count), usize::from(count)))
+        .map(|(card_id, _)| {
+            cards
+                .get(&card_id)
+                .map(|card| card.name.clone())
+                .unwrap_or(card_id)
+        })
+        .take(5)
+        .collect::<Vec<_>>();
+    (!removed.is_empty()).then(|| {
+        let mut lines = vec![format!(
+            "Cards actually removed · {normal_capacity}/{normal_capacity} restored"
+        )];
+        lines.extend(removed.into_iter().map(|name| format!("Removed {name}")));
+        lines
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn redraft_review_lines(
+    snapshot: &ObserverSnapshot,
+    cards: &CardCache,
+    ratings: Option<&arena_scoring::CompositeRatingProvider>,
+) -> Option<Vec<String>> {
+    use hs_state::RedraftStage;
+
+    let explicit_review = snapshot.run.draft_phase == hs_state::ArenaDraftPhase::Redrafting
+        && matches!(
+            snapshot.draft.redraft.stage,
+            RedraftStage::AwaitingDiscardReview | RedraftStage::ReviewingDiscards
+        );
+    // Some clients omit the Redraft mode marker and expose the editor only as
+    // a temporary 35/35 sidebar. Once the complete sidebar confirms that
+    // state, it is safe to show the same five-cut recommendation above the
+    // deck even though the reducer still reports ACTIVE_DRAFT_DECK.
+    let editor_capacity = u16::from(arena_draft::ARENA_EDITOR_DECK_CAPACITY);
+    let observed_editor_review = snapshot.deck_state.expected_slots == Some(editor_capacity)
+        && snapshot.deck_state.observed_slots == editor_capacity;
+    let observed_editor_partial = snapshot.deck_state.expected_slots == Some(editor_capacity)
+        && snapshot.deck_state.observed_slots < editor_capacity;
+    if observed_editor_partial {
+        return Some(vec![
+            format!(
+                "Deck editor detected · {}/{} cards observed",
+                snapshot.deck_state.observed_slots, editor_capacity
+            ),
+            "Scroll the deck panel so all cards are visible to finish syncing".to_owned(),
+        ]);
+    }
+    if !explicit_review && !observed_editor_review {
+        return None;
+    }
+
+    let mut candidates = snapshot
+        .deck
+        .iter()
+        .flat_map(|entry| {
+            let name = cards
+                .get(&entry.card_id)
+                .map(|card| card.name.clone())
+                .unwrap_or_else(|| entry.card_id.clone());
+            let score = ratings.and_then(|provider| {
+                provider
+                    .rating(&entry.card_id, snapshot.hero_class)
+                    .map(|rating| rating.value)
+            });
+            std::iter::repeat_n(
+                (score, name, entry.card_id.clone()),
+                usize::from(entry.count),
+            )
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        left.0
+            .unwrap_or(f32::INFINITY)
+            .total_cmp(&right.0.unwrap_or(f32::INFINITY))
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.cmp(&right.2))
+    });
+
+    let mut lines = vec!["Lowest-rated cards · choose up to 5 to remove".to_owned()];
+    for (index, (score, name, _)) in candidates.into_iter().take(5).enumerate() {
+        lines.push(format!(
+            "Cut {} · {}",
+            name,
+            score
+                .map(|value| format!("{value:.0}"))
+                .unwrap_or_else(|| "—".to_owned())
+        ));
+        if index == 4 {
+            break;
+        }
+    }
+    Some(lines)
 }
 
 #[cfg(target_os = "macos")]
@@ -3196,7 +3427,7 @@ mod tests {
         snapshot.draft.phase_progress_status = hs_state::DraftPhaseProgressStatus::Unknown;
         snapshot.draft.pick_number = 0;
         snapshot.draft.redraft.pick_progress_known = false;
-        assert!(unresolved_draft_key(&snapshot).is_none());
+        assert!(unresolved_draft_key(&snapshot).is_some());
         snapshot.draft.phase_progress_status = hs_state::DraftPhaseProgressStatus::Complete;
         snapshot.draft.pick_number = 1;
         snapshot.draft.redraft.pick_progress_known = true;
@@ -3215,6 +3446,64 @@ mod tests {
         snapshot.run.draft_mode = Some("ACTIVE_DRAFT_DECK".to_owned());
         snapshot.run.draft_phase = hs_state::ArenaDraftPhase::ActiveDeck;
         assert!(unresolved_draft_key(&snapshot).is_none());
+    }
+
+    #[test]
+    fn draft_header_matching_tolerates_vision_spacing_and_plural_variants() {
+        let text = |value: &str| arena_next_macos_capture::RecognizedText {
+            text: value.to_owned(),
+            confidence: 0.99,
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        };
+        assert!(draft_header_detected(&[text("Draft New Cards")]));
+        assert!(draft_header_detected(&[text("Draft"), text("Your Deck")]));
+        assert!(!draft_header_detected(&[text("Your Deck")]));
+    }
+
+    #[test]
+    fn resynced_editor_draft_key_is_disabled_during_gameplay() {
+        let mut snapshot = unresolved_draft_snapshot();
+        snapshot.run.draft_phase = hs_state::ArenaDraftPhase::ActiveDeck;
+        snapshot.deck_state.expected_slots = Some(30);
+        snapshot.deck_state.observed_slots = 27;
+        snapshot.game.active = true;
+        assert!(unresolved_draft_key(&snapshot).is_none());
+    }
+
+    #[test]
+    fn cut_review_lists_the_five_cards_removed_from_the_editor() {
+        let mut before = unresolved_draft_snapshot();
+        before.deck_state.expected_slots = Some(35);
+        before.deck_state.observed_slots = 35;
+        before.deck = vec![hs_observer::ResolvedDeckCard {
+            card_id: "CUT_CARD".to_owned(),
+            count: 35,
+            resolution: CardResolution::MissingMetadata {
+                card_id: "CUT_CARD".to_owned(),
+            },
+        }];
+
+        let mut after = before.clone();
+        after.deck_state.expected_slots = Some(30);
+        after.deck_state.observed_slots = 30;
+        after.deck[0].count = 30;
+
+        let lines = sidebar_cut_lines(&before, &after, &CardCache::empty())
+            .expect("a complete editor-to-normal transition should report cuts");
+        assert_eq!(lines[0], "Cards actually removed · 30/30 restored");
+        assert_eq!(
+            lines[1..],
+            [
+                "Removed CUT_CARD",
+                "Removed CUT_CARD",
+                "Removed CUT_CARD",
+                "Removed CUT_CARD",
+                "Removed CUT_CARD",
+            ]
+        );
     }
 
     #[test]

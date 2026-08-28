@@ -15,6 +15,11 @@ use serde::{Deserialize, Serialize};
 // binary that cannot deserialize that source; live attach safely resyncs it.
 pub const SNAPSHOT_SCHEMA_VERSION: u32 = 10;
 
+/// The normal Arena deck size enforced by the run rules.
+pub const ARENA_DECK_SLOTS: u16 = 30;
+/// Temporary deck-editor size exposed while an Arena Redraft is assembled.
+pub const ARENA_EDITOR_DECK_SLOTS: u16 = 35;
+
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArenaSnapshot {

@@ -666,14 +666,23 @@ fn write_atomically(path: &Path, parent: &Path, updated: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{env, fs};
+    use std::{
+        env, fs,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    static NEXT_TEST_PATH: AtomicU64 = AtomicU64::new(0);
 
     fn temp_config() -> PathBuf {
-        let suffix = SystemTime::now()
+        let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        env::temp_dir().join(format!("arena-next-log-config-{suffix}.config"))
+        let sequence = NEXT_TEST_PATH.fetch_add(1, Ordering::Relaxed);
+        env::temp_dir().join(format!(
+            "arena-next-log-config-{}-{timestamp}-{sequence}.config",
+            std::process::id()
+        ))
     }
 
     #[test]

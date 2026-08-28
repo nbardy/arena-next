@@ -853,6 +853,10 @@ impl HearthstoneLogParser {
             return Vec::new();
         }
         if let Some(captures) = ON_CHOSEN.captures(message) {
+            // Newer clients may omit the authoritative deck snapshot until
+            // several picks have already been made. Once the hero choice is
+            // explicitly confirmed, later choices are card picks.
+            self.arena_picks_enabled = true;
             return vec![GameEvent::HeroCard {
                 card_id: captures["hero"].to_owned(),
             }];
@@ -1113,6 +1117,36 @@ mod tests {
     }
 
     #[test]
+    fn current_client_log_enables_picks_after_hero_confirmation_without_snapshot() {
+        let mut parser = HearthstoneLogParser::default();
+        assert_eq!(
+            parser.parse_line(&arena_line(
+                "OnBegin - Got new draft deck with ID: 3375302624"
+            )),
+            vec![GameEvent::ArenaRunStarted {
+                draft_deck_id: "3375302624".into(),
+            }]
+        );
+        assert!(
+            parser
+                .parse_line(&arena_line("Client chooses: Garrosh Hellscream (HERO_01)"))
+                .is_empty()
+        );
+        assert_eq!(
+            parser.parse_line(&arena_line("DraftManager.OnChosen(): hero=HERO_01")),
+            vec![GameEvent::HeroCard {
+                card_id: "HERO_01".into(),
+            }]
+        );
+        assert_eq!(
+            parser.parse_line(&arena_line("Client chooses: Captain Crowley (CAP_106)")),
+            vec![GameEvent::ArenaPick {
+                card_id: "CAP_106".into(),
+            }]
+        );
+    }
+
+    #[test]
     fn hero_client_choices_never_become_arena_picks_even_when_enabled() {
         let mut parser = HearthstoneLogParser::default();
         parser.enable_arena_picks_after_authoritative_baseline();
@@ -1194,7 +1228,7 @@ mod tests {
         .unwrap();
         let report = parse_session(&directory).unwrap();
         assert_eq!(report.raw_line_count, 2);
-        assert_eq!(report.events.len(), 1);
+        assert_eq!(report.events.len(), 2);
         fs::remove_dir_all(directory).unwrap();
     }
 
