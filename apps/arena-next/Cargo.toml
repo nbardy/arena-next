@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Small native Hearthstone Arena overlay for macOS"
+description = "Fast, lightweight open-source Hearthstone Arena tracker for macOS"
 
 [dependencies]
 anyhow.workspace = true

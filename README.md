@@ -1,9 +1,10 @@
-# HearthAI
+# ArenaNext
 
-HearthAI is a macOS-first, GPL-2.0-only Hearthstone companion designed
-to ship as a small native application—not an Electron app and not a bundled
-browser runtime. Its release path is one native Rust executable linked only to
-macOS system frameworks, with a compact AppKit overlay.
+ArenaNext is an open-source Hearthstone Arena tracker: a fast, lightweight,
+macOS-first companion for live deck tracking, draft recognition, card ratings,
+and redraft review. It is written in Rust and ships as a small native
+application—not an Electron app and not a bundled browser runtime—so it adds
+minimal resource overhead while Hearthstone is running.
 
 This repository is a fresh implementation. `legacy-arena-tracker` is kept
 beside it only as a GPL-2.0 reference checkout; ArenaNext never loads or
@@ -93,6 +94,16 @@ fingerprint and rating workflow, and
 deterministic-first optional AI analyst design.
 See [arena-rules.md](docs/arena-rules.md) for the local expected-deck-size
 manifest used to report incomplete decks truthfully.
+
+## Why ArenaNext
+
+- Fast startup and low overhead from a native Rust implementation.
+- Read-only Hearthstone log observation with user-approved window capture for
+  draft recognition.
+- Local card data and ratings, with conservative OCR matching and explicit
+  unknown states instead of invented card identities.
+- Open source under GPL-2.0-only, so the tracker can be inspected, improved,
+  and redistributed with its source.
 
 ## License
 
